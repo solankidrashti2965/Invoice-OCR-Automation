@@ -8,19 +8,19 @@ import os
 st.set_page_config(page_title="Invoice OCR Automation", layout="centered")
 
 st.title("📄 Invoice OCR Automation")
-st.write("Upload a valid invoice image to extract details")
+st.write("Upload a valid invoice image")
 
-uploaded_file = st.file_uploader(
+uploaded = st.file_uploader(
     "Upload Invoice Image",
     type=["jpg", "jpeg", "png"]
 )
 
-if uploaded_file:
-    image = Image.open(uploaded_file)
+if uploaded:
+    image = Image.open(uploaded)
     st.image(image, caption="Uploaded Image", use_column_width=True)
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
-        tmp.write(uploaded_file.getvalue())
+        tmp.write(uploaded.getvalue())
         temp_path = tmp.name
 
     try:
@@ -28,54 +28,50 @@ if uploaded_file:
         text_lower = text.lower()
         lines = [l.strip() for l in text.split("\n") if l.strip()]
 
-        # ---------------- INVOICE VALIDATION ----------------
-        invoice_keywords = [
+        # ---------- VALIDATE INVOICE ----------
+        keywords = [
             "invoice", "total", "amount", "bill",
             "invoice #", "subtotal", "tax", "due date"
         ]
 
-        keyword_hits = sum(1 for k in invoice_keywords if k in text_lower)
+        hits = sum(1 for k in keywords if k in text_lower)
 
-        if keyword_hits < 2:
-            st.error("❌ This image does not appear to be a valid invoice.")
+        if hits < 2:
+            st.error("❌ This image is NOT a valid invoice.")
             st.stop()
 
-        # ---------------- EXTRACTION ----------------
+        # ---------- EXTRACTION ----------
         invoice_no = "Not found"
-        total_amount = "Not found"
+        total = "Not found"
         vendor = "Not found"
 
-        for line in lines:
-            m = re.search(r'invoice\s*#\s*(\d+)', line, re.I)
+        for ln in lines:
+            m = re.search(r'invoice\s*#\s*(\d+)', ln, re.I)
             if m:
                 invoice_no = m.group(1)
                 break
 
-        for line in lines:
-            if re.match(r'^total\b', line, re.I):
-                m = re.search(r'\$([\d,.]+)', line)
+        for ln in lines:
+            if ln.lower().startswith("total"):
+                m = re.search(r'\$([\d,.]+)', ln)
                 if m:
-                    total_amount = "$" + m.group(1)
+                    total = "$" + m.group(1)
                     break
 
-        for line in lines[:6]:
-            if any(c.isalpha() for c in line):
-                vendor = re.sub(r'\d{3}-\d{3}-\d{4}', '', line).strip()
+        for ln in lines[:6]:
+            if any(c.isalpha() for c in ln):
+                vendor = ln
                 break
 
-        # ---------------- OUTPUT ----------------
+        # ---------- OUTPUT ----------
         st.success("✅ Valid Invoice Detected")
-
         st.write("### 📌 Extracted Details")
         st.write(f"**Invoice Number:** {invoice_no}")
-        st.write(f"**Vendor Name:** {vendor}")
-        st.write(f"**Total Amount:** {total_amount}")
-
-        with st.expander("🔍 OCR Debug Text"):
-            st.text(text)
+        st.write(f"**Vendor:** {vendor}")
+        st.write(f"**Total Amount:** {total}")
 
     except Exception as e:
-        st.error(f"Error: {e}")
+        st.error(f"OCR Error: {e}")
 
     finally:
         if os.path.exists(temp_path):
