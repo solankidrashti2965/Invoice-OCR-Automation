@@ -1,46 +1,100 @@
 import streamlit as st
 from PIL import Image
-import easyocr
+import pytesseract
 import re
 import tempfile
 import os
 
-st.set_page_config(page_title="Invoice OCR Automation", layout="centered")
-
+st.set_page_config(page_title="Invoice OCR", layout="centered")
 st.title("📄 Invoice OCR Automation")
-st.write("Upload a **valid invoice image** to extract details")
 
-uploaded = st.file_uploader("Upload Invoice", type=["jpg", "png", "jpeg"])
+st.write("Upload a valid invoice image (JPG / PNG)")
+
+uploaded = st.file_uploader("Upload Invoice", type=["jpg", "jpeg", "png"])
+
+def clean(text):
+    return text.replace("\n", " ").strip()
+
+def extract(patterns, text):
+    for p in patterns:
+        m = re.search(p, text, re.I)
+        if m:
+            return clean(m.group(1))
+    return "Not found"
 
 if uploaded:
     st.image(uploaded, width=450)
 
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as f:
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as f:
         f.write(uploaded.getvalue())
         img_path = f.name
 
     try:
-        reader = easyocr.Reader(['en'], gpu=False)
-        result = reader.readtext(img_path, detail=0)
-        text = " ".join(result)
+        img = Image.open(img_path)
+        text = pytesseract.image_to_string(img, config="--oem 3 --psm 6")
 
-        # ---------- VALIDATION ----------
-        if not re.search(r'invoice', text, re.I):
-            st.error("❌ This does not look like an invoice.")
+        if len(text.strip()) < 30:
+            st.error("❌ Not a valid invoice image")
+            st.stop()
+
+        text_lower = text.lower()
+
+        # ---------- STRICT INVOICE VALIDATION ----------
+        invoice_keywords = ["invoice", "total", "amount", "subtotal"]
+        if not any(k in text_lower for k in invoice_keywords):
+            st.error("❌ This does not look like an invoice")
             st.stop()
 
         # ---------- EXTRACTION ----------
-        invoice_no = re.search(r'Invoice\s*#?\s*(\d+)', text, re.I)
-        total_amt = re.search(r'Total\s*\$?\s*([\d,.]+)', text, re.I)
+        invoice_no = extract([
+            r"invoice\s*#?\s*[:\-]?\s*([A-Z0-9\-]+)"
+        ], text)
 
+        invoice_date = extract([
+            r"invoice\s*date\s*[:\-]?\s*([0-9\/\-\.]+)",
+            r"date\s*[:\-]?\s*([0-9\/\-\.]+)"
+        ], text)
+
+        due_date = extract([
+            r"due\s*date\s*[:\-]?\s*([0-9\/\-\.]+)"
+        ], text)
+
+        vendor = extract([
+            r"bill\s*from\s*[:\-]?\s*([A-Za-z &]+)",
+            r"from\s*[:\-]?\s*([A-Za-z &]+)",
+        ], text)
+
+        subtotal = extract([
+            r"subtotal\s*[:\-]?\s*[₹$]?\s*([\d,]+\.\d{2})"
+        ], text)
+
+        tax = extract([
+            r"(cgst|sgst|tax)\s*[:\-]?\s*[₹$]?\s*([\d,]+\.\d{2})"
+        ], text)
+
+        total = extract([
+            r"total\s*[:\-]?\s*[₹$]?\s*([\d,]+\.\d{2})",
+            r"amount\s*due\s*[:\-]?\s*[₹$]?\s*([\d,]+\.\d{2})"
+        ], text)
+
+        # ---------- OUTPUT ----------
         st.success("✅ Invoice processed successfully")
 
-        st.write("### Extracted Details")
-        st.write("**Invoice Number:**", invoice_no.group(1) if invoice_no else "Not found")
-        st.write("**Total Amount:**", "$" + total_amt.group(1) if total_amt else "Not found")
+        st.subheader("Extracted Details")
+        st.write("**Invoice Number:**", invoice_no)
+        st.write("**Vendor / Company:**", vendor)
+        st.write("**Invoice Date:**", invoice_date)
+        st.write("**Due Date:**", due_date)
+        st.write("**Subtotal:**", subtotal)
+        st.write("**Tax:**", tax)
+        st.write("**Total Amount:**", total)
+
+        with st.expander("🔍 OCR Text (Debug)"):
+            st.text(text)
 
     except Exception as e:
-        st.error(f"OCR Failed: {e}")
+        st.error("❌ OCR processing failed safely")
+        st.code(str(e))
 
     finally:
         os.remove(img_path)
