@@ -5,96 +5,115 @@ import re
 import tempfile
 import os
 
-st.set_page_config(page_title="Invoice OCR", layout="centered")
+# Streamlit Cloud Tesseract path
+pytesseract.pytesseract.tesseract_cmd = "/usr/bin/tesseract"
+
+st.set_page_config(page_title="Invoice OCR Automation", layout="centered")
 st.title("📄 Invoice OCR Automation")
+st.write("Upload an invoice image to extract details")
 
-st.write("Upload a valid invoice image (JPG / PNG)")
+uploaded_file = st.file_uploader(
+    "Upload Invoice Image", type=["png", "jpg", "jpeg"]
+)
 
-uploaded = st.file_uploader("Upload Invoice", type=["jpg", "jpeg", "png"])
-
-def clean(text):
-    return text.replace("\n", " ").strip()
-
-def extract(patterns, text):
+def extract_field(patterns, text):
     for p in patterns:
-        m = re.search(p, text, re.I)
-        if m:
-            return clean(m.group(1))
+        match = re.search(p, text, re.IGNORECASE)
+        if match:
+            return match.group(1).strip()
     return "Not found"
 
-if uploaded:
-    st.image(uploaded, width=450)
+if uploaded_file:
+    st.image(uploaded_file, width=400)
 
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as f:
-        f.write(uploaded.getvalue())
-        img_path = f.name
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
+        tmp.write(uploaded_file.read())
+        image_path = tmp.name
 
     try:
-        img = Image.open(img_path)
-        text = pytesseract.image_to_string(img, config="--oem 3 --psm 6")
+        image = Image.open(image_path).convert("RGB")
+        text = pytesseract.image_to_string(image, config="--oem 3 --psm 6")
 
-        if len(text.strip()) < 30:
-            st.error("❌ Not a valid invoice image")
-            st.stop()
+        if not text.strip():
+            st.error("⚠️ No readable text found in image")
+        else:
+            st.success("✅ OCR completed successfully")
 
-        text_lower = text.lower()
+            # ---------- EXTRACTION LOGIC ----------
+            invoice_number = extract_field(
+                [
+                    r"Invoice\s*#?\s*([A-Z0-9\-]+)",
+                    r"Invoice\s*No\.?\s*([A-Z0-9\-]+)"
+                ],
+                text
+            )
 
-        
-        invoice_keywords = ["invoice", "total", "amount", "subtotal"]
-        if not any(k in text_lower for k in invoice_keywords):
-            st.error("❌ This does not look like an invoice")
-            st.stop()
+            invoice_date = extract_field(
+                [
+                    r"Invoice\s*Date\s*[:\-]?\s*([0-9\/\-\.]+)",
+                    r"Date\s*[:\-]?\s*([0-9\/\-\.]+)"
+                ],
+                text
+            )
 
-        
-        invoice_no = extract([
-            r"invoice\s*#?\s*[:\-]?\s*([A-Z0-9\-]+)"
-        ], text)
+            due_date = extract_field(
+                [
+                    r"Due\s*Date\s*[:\-]?\s*([0-9\/\-\.]+)"
+                ],
+                text
+            )
 
-        invoice_date = extract([
-            r"invoice\s*date\s*[:\-]?\s*([0-9\/\-\.]+)",
-            r"date\s*[:\-]?\s*([0-9\/\-\.]+)"
-        ], text)
+            vendor_name = extract_field(
+                [
+                    r"^(.*?)(?:Invoice|Bill To)",
+                ],
+                text.split("\n")[0]
+            )
 
-        due_date = extract([
-            r"due\s*date\s*[:\-]?\s*([0-9\/\-\.]+)"
-        ], text)
+            phone_number = extract_field(
+                [
+                    r"(\+?\d{1,3}[-\s]?\d{3}[-\s]?\d{3}[-\s]?\d{4})",
+                    r"(\d{3}[-\s]\d{3}[-\s]\d{4})"
+                ],
+                text
+            )
 
-        vendor = extract([
-            r"bill\s*from\s*[:\-]?\s*([A-Za-z &]+)",
-            r"from\s*[:\-]?\s*([A-Za-z &]+)",
-        ], text)
+            total_amount = extract_field(
+                [
+                    r"Total\s*[:\-]?\s*\$?\s*([0-9,]+\.\d{2})",
+                    r"Grand\s*Total\s*[:\-]?\s*\$?\s*([0-9,]+\.\d{2})",
+                    r"Amount\s*Due\s*[:\-]?\s*\$?\s*([0-9,]+\.\d{2})"
+                ],
+                text
+            )
 
-        subtotal = extract([
-            r"subtotal\s*[:\-]?\s*[₹$]?\s*([\d,]+\.\d{2})"
-        ], text)
+            tax_amount = extract_field(
+                [
+                    r"Tax\s*[:\-]?\s*\$?\s*([0-9,]+\.\d{2})",
+                    r"CGST.*?([0-9,]+\.\d{2})",
+                    r"SGST.*?([0-9,]+\.\d{2})"
+                ],
+                text
+            )
 
-        tax = extract([
-            r"(cgst|sgst|tax)\s*[:\-]?\s*[₹$]?\s*([\d,]+\.\d{2})"
-        ], text)
+            # ---------- OUTPUT ----------
+            st.subheader("📌 Extracted Invoice Details")
 
-        total = extract([
-            r"total\s*[:\-]?\s*[₹$]?\s*([\d,]+\.\d{2})",
-            r"amount\s*due\s*[:\-]?\s*[₹$]?\s*([\d,]+\.\d{2})"
-        ], text)
+            st.write(f"**Vendor Name:** {vendor_name}")
+            st.write(f"**Invoice Number:** {invoice_number}")
+            st.write(f"**Invoice Date:** {invoice_date}")
+            st.write(f"**Due Date:** {due_date}")
+            st.write(f"**Phone / Account No:** {phone_number}")
+            st.write(f"**Tax Amount:** {tax_amount}")
+            st.write(f"**Total Amount:** {total_amount}")
 
-        
-        st.success("✅ Invoice processed successfully")
-
-        st.subheader("Extracted Details")
-        st.write("**Invoice Number:**", invoice_no)
-        st.write("**Vendor / Company:**", vendor)
-        st.write("**Invoice Date:**", invoice_date)
-        st.write("**Due Date:**", due_date)
-        st.write("**Subtotal:**", subtotal)
-        st.write("**Tax:**", tax)
-        st.write("**Total Amount:**", total)
-
-        with st.expander("🔍 OCR Text (Debug)"):
-            st.text(text)
+            with st.expander("🔍 View Full OCR Text"):
+                st.text(text)
 
     except Exception as e:
         st.error("❌ OCR processing failed safely")
         st.code(str(e))
 
     finally:
-        os.remove(img_path)
+        if os.path.exists(image_path):
+            os.remove(image_path)
