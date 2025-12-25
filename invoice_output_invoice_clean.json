@@ -1,9 +1,0 @@
-{
-  "invoice_number": "12345",
-  "date": "2024-08-01",
-  "vendor": "Craigs’ Landscaping",
-  "total_amount": "$634.73",
-  "total_amount_numeric": "634.73",
-  "account_number": "123-456-7890",
-  "raw_lines_count": 18
-}
