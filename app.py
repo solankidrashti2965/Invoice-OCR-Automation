@@ -39,13 +39,13 @@ if uploaded:
 
         text_lower = text.lower()
 
-        # ---------- STRICT INVOICE VALIDATION ----------
+        
         invoice_keywords = ["invoice", "total", "amount", "subtotal"]
         if not any(k in text_lower for k in invoice_keywords):
             st.error("❌ This does not look like an invoice")
             st.stop()
 
-        # ---------- EXTRACTION ----------
+        
         invoice_no = extract([
             r"invoice\s*#?\s*[:\-]?\s*([A-Z0-9\-]+)"
         ], text)
@@ -77,7 +77,7 @@ if uploaded:
             r"amount\s*due\s*[:\-]?\s*[₹$]?\s*([\d,]+\.\d{2})"
         ], text)
 
-        # ---------- OUTPUT ----------
+        
         st.success("✅ Invoice processed successfully")
 
         st.subheader("Extracted Details")
