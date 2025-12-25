@@ -1,88 +1,20 @@
-import streamlit as st
-from PIL import Image
-import pytesseract
-import re
+# ✅ Extract Invoice Number
+        invoice_no = "Not found"
+        match_inv = re.search(r'invoice\s*#?\s*(\d+)', text, re.I)
+        if match_inv:
+            invoice_no = match_inv.group(1)
 
-st.set_page_config(page_title="Invoice OCR Automation", layout="centered")
+        # ✅ Extract Total Amount
+        total_amount = "Not found"
+        match_total = re.search(r'total\s*\$?\s*([\d,.]+)', text, re.I)
+        if match_total:
+            total_amount = "$" + match_total.group(1)
 
-st.title("📄 Invoice OCR Automation")
-st.write("Upload a valid invoice image to extract details")
-
-uploaded_file = st.file_uploader(
-    "Upload Invoice Image",
-    type=["jpg", "png", "jpeg"]
-)
-
-if uploaded_file:
-    image = Image.open(uploaded_file)
-    st.image(image, caption="Uploaded Invoice", use_column_width=True)
-
-    try:
-        # OCR
-        text = pytesseract.image_to_string(image, config="--oem 3 --psm 6")
-        text_lower = text.lower()
-
-        # ❌ Reject random images
-        if "invoice" not in text_lower:
-            st.error("❌ This image does not appear to be a valid invoice.")
-            st.stop()
-
-         try:
-        img = Image.open(img_path).convert("RGB")
-        text = pytesseract.image_to_string(img)
-
-        if not text.strip():
-            st.error("⚠️ No readable text detected")
-        else:
-            st.success("✅ Invoice processed successfully")
-
-            invoice_no = extract(
-                [r"Invoice\s*#?\s*([A-Z0-9\-]+)"], text
-            )
-
-            invoice_date = extract(
-                [r"Invoice\s*Date\s*[:\-]?\s*([0-9\/\-\.]+)",
-                 r"Date\s*[:\-]?\s*([0-9\/\-\.]+)"],
-                text
-            )
-
-            due_date = extract(
-                [r"Due\s*Date\s*[:\-]?\s*([0-9\/\-\.]+)"],
-                text
-            )
-
-            total = extract(
-                [
-                    r"Total\s*\$?\s*([0-9,]+\.\d{2})",
-                    r"Grand\s*Total\s*\$?\s*([0-9,]+\.\d{2})",
-                    r"Amount\s*Due\s*\$?\s*([0-9,]+\.\d{2})"
-                ],
-                text
-            )
-
-            phone = extract(
-                [r"(\d{3}[-\s]\d{3}[-\s]\d{4})"], text
-            )
-
-            vendor = extract(
-                [r"^(.*?)(?:Invoice|Bill|GST|Tax)"],
-                text.split("\n")[0]
-            )
-
-            st.subheader("📌 Extracted Details")
-            st.write(f"*Vendor Name:* {vendor}")
-            st.write(f"*Invoice Number:* {invoice_no}")
-            st.write(f"*Invoice Date:* {invoice_date}")
-            st.write(f"*Due Date:* {due_date}")
-            st.write(f"*Phone / Account No:* {phone}")
-            st.write(f"*Total Amount:* {total}")
-
-            with st.expander("🔍 Full OCR Text"):
-                st.text(text)
+        st.success("✅ Invoice processed successfully")
+        st.write(f"**Invoice Number:** {invoice_no}")
+        st.write(f"**Total Amount:** {total_amount}")
 
     except Exception as e:
-        st.error("❌ OCR processing failed safely")
+        st.error("⚠️ OCR processing failed.")
         st.code(str(e))
-
-    finally:
-        os.remove(img_path)
+        
