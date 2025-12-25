@@ -1,48 +1,46 @@
 import streamlit as st
 from PIL import Image
-import pytesseract
+import easyocr
 import re
+import tempfile
+import os
 
 st.set_page_config(page_title="Invoice OCR Automation", layout="centered")
 
 st.title("📄 Invoice OCR Automation")
-st.write("Upload a valid invoice image to extract details")
+st.write("Upload a **valid invoice image** to extract details")
 
-uploaded_file = st.file_uploader(
-    "Upload Invoice Image",
-    type=["jpg", "png", "jpeg"]
-)
+uploaded = st.file_uploader("Upload Invoice", type=["jpg", "png", "jpeg"])
 
-if uploaded_file:
-    image = Image.open(uploaded_file)
-    st.image(image, caption="Uploaded Invoice", use_column_width=True)
+if uploaded:
+    st.image(uploaded, width=450)
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as f:
+        f.write(uploaded.getvalue())
+        img_path = f.name
 
     try:
-        # OCR
-        text = pytesseract.image_to_string(image, config="--oem 3 --psm 6")
-        text_lower = text.lower()
+        reader = easyocr.Reader(['en'], gpu=False)
+        result = reader.readtext(img_path, detail=0)
+        text = " ".join(result)
 
-        # ❌ Reject random images
-        if "invoice" not in text_lower:
-            st.error("❌ This image does not appear to be a valid invoice.")
+        # ---------- VALIDATION ----------
+        if not re.search(r'invoice', text, re.I):
+            st.error("❌ This does not look like an invoice.")
             st.stop()
 
-        # ✅ Extract Invoice Number
-        invoice_no = "Not found"
-        match_inv = re.search(r'invoice\s*#?\s*(\d+)', text, re.I)
-        if match_inv:
-            invoice_no = match_inv.group(1)
-
-        # ✅ Extract Total Amount
-        total_amount = "Not found"
-        match_total = re.search(r'total\s*\$?\s*([\d,.]+)', text, re.I)
-        if match_total:
-            total_amount = "$" + match_total.group(1)
+        # ---------- EXTRACTION ----------
+        invoice_no = re.search(r'Invoice\s*#?\s*(\d+)', text, re.I)
+        total_amt = re.search(r'Total\s*\$?\s*([\d,.]+)', text, re.I)
 
         st.success("✅ Invoice processed successfully")
-        st.write(f"**Invoice Number:** {invoice_no}")
-        st.write(f"**Total Amount:** {total_amount}")
+
+        st.write("### Extracted Details")
+        st.write("**Invoice Number:**", invoice_no.group(1) if invoice_no else "Not found")
+        st.write("**Total Amount:**", "$" + total_amt.group(1) if total_amt else "Not found")
 
     except Exception as e:
-        st.error("⚠️ OCR processing failed.")
-        st.code(str(e))
+        st.error(f"OCR Failed: {e}")
+
+    finally:
+        os.remove(img_path)
