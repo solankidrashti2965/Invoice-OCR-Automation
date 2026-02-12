@@ -6,7 +6,7 @@ import pdfplumber
 import io
 
 st.set_page_config(page_title="Universal Invoice OCR", layout="centered")
-st.title("📄 Universal Invoice OCR Automation")
+st.title(" Invoice OCR Automation")
 st.write("Upload any Invoice (Image or PDF)")
 
 uploaded = st.file_uploader(
