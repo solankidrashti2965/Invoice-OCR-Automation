@@ -22,14 +22,14 @@ def clean_text(text):
 def extract_invoice_details(text):
 
     data = {
-        "Vendor / Company": "Not found",
-        "Invoice Number": "Not found",
-        "Invoice Date": "Not found",
-        "Due Date": "Not found",
-        "Subtotal": "Not found",
-        "Tax": "Not found",
-        "Total Amount": "Not found",
-        "Phone / Account": "Not found"
+        "Vendor / Company": " ",
+        "Invoice Number": " ",
+        "Invoice Date": " ",
+        "Due Date": " ",
+        "Subtotal": " ",
+        "Tax": " ",
+        "Total Amount": " ",
+        "Phone / Account": " "
     }
 
     lines = [l.strip() for l in text.splitlines() if l.strip()]
