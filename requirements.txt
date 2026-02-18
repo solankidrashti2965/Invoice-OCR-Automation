@@ -1,2 +1,4 @@
-Pillow
 streamlit
+pytesseract
+pillow
+pdf2image
