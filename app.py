@@ -4,116 +4,119 @@ import pytesseract
 import re
 import tempfile
 import os
-import pdf2image
+
 
 st.set_page_config(page_title="Invoice OCR Automation", layout="centered")
 st.title("📄 Invoice OCR Automation")
-st.write("Upload invoice (Image or PDF)")
+st.write("Upload a **valid invoice image** to extract details")
+
 
 uploaded = st.file_uploader(
-    "Upload Invoice",
-    type=["jpg", "jpeg", "png", "pdf"]
+    "Upload Invoice Image",
+    type=["jpg", "jpeg", "png"]
 )
 
-def extract_amount(keyword, text):
-    pattern = rf"{keyword}.*?(₹|Rs\.?|INR|\$)?\s*([\d,]+\.\d+)"
-    match = re.search(pattern, text, re.I | re.S)
-    if match:
-        symbol = match.group(1) or ""
-        amount = match.group(2)
-        return f"{symbol} {amount}".strip()
-    return "Not found"
-
-def extract_date(text, keyword):
-    pattern = rf"{keyword}.*?(\d{{4}}[-/]\d{{2}}[-/]\d{{2}}|\d{{2}}[-/]\d{{2}}[-/]\d{{4}})"
-    match = re.search(pattern, text, re.I)
-    return match.group(1) if match else "Not found"
-
 if uploaded:
+    st.image(uploaded, width=450)
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as f:
+        f.write(uploaded.getvalue())
+        img_path = f.name
 
     try:
-        # --------------------
-        # Handle PDF
-        # --------------------
-        if uploaded.type == "application/pdf":
-            images = pdf2image.convert_from_bytes(uploaded.read())
-            image = images[0]
-        else:
-            image = Image.open(uploaded).convert("RGB")
-
-        st.image(image, width=450)
+        image = Image.open(img_path).convert("RGB")
 
         # OCR
-        raw_text = pytesseract.image_to_string(image, config="--oem 3 --psm 6")
+        raw_text = pytesseract.image_to_string(
+            image,
+            config="--oem 3 --psm 6"
+        )
 
         if not raw_text.strip():
-            st.error("No readable text found.")
+            st.error("❌ No readable text found. Please upload a clear invoice.")
             st.stop()
 
-        # --------------------
-        # Vendor (top section)
-        # --------------------
-        lines = [l.strip() for l in raw_text.splitlines() if l.strip()]
+        
+
+        # Vendor / Company (top lines)
         vendor = "Not found"
-        for line in lines[:8]:
-            if not any(k in line.lower() for k in ["invoice", "date", "gst", "total", "tax"]):
-                if len(line) > 4:
-                    vendor = line
-                    break
+        for line in raw_text.splitlines()[:6]:
+            if len(line.strip()) > 3 and not any(
+                k in line.lower() for k in ["invoice", "date", "bill", "total"]
+            ):
+                vendor = line.strip()
+                break
 
-        # --------------------
         # Invoice Number
-        # --------------------
-        inv_patterns = [
-            r"invoice\s*(no|number|#)\s*[:\-]?\s*([\w\-]+)",
-            r"\bINV[-\w]+\b"
-        ]
-
         invoice_no = "Not found"
+        inv_patterns = [
+            r"invoice\s*(no|number|#)\s*[:\-]?\s*(\w+)",
+            r"inv\s*#\s*(\w+)"
+        ]
         for p in inv_patterns:
             m = re.search(p, raw_text, re.I)
             if m:
-                invoice_no = m.group(2) if len(m.groups()) > 1 else m.group(0)
+                invoice_no = m.group(2)
                 break
 
-        # --------------------
-        # Dates
-        # --------------------
-        invoice_date = extract_date(raw_text, "invoice date")
-        due_date = extract_date(raw_text, "due date")
+        # Invoice Date
+        invoice_date = "Not found"
+        m = re.search(
+            r"(invoice\s*date|dated)\s*[:\-]?\s*([0-9A-Za-z ,/-]+)",
+            raw_text,
+            re.I
+        )
+        if m:
+            invoice_date = m.group(2).strip()
 
-        # --------------------
-        # Subtotal / Tax / Total
-        # --------------------
-        subtotal = extract_amount("subtotal|taxable amount", raw_text)
-        tax = extract_amount("tax|gst|igst|cgst|sgst", raw_text)
-        total = extract_amount("grand total|total amount|amount due|total", raw_text)
+        # Due Date
+        due_date = "Not found"
+        m = re.search(
+            r"(due\s*date|payment\s*due)\s*[:\-]?\s*([0-9A-Za-z ,/-]+)",
+            raw_text,
+            re.I
+        )
+        if m:
+            due_date = m.group(2).strip()
 
-        # --------------------
-        # Phone
-        # --------------------
-        phone_match = re.search(r"\b\d{10}\b", raw_text)
-        phone = phone_match.group() if phone_match else "Not found"
+        # Total Amount 
+        total_amount = "Not found"
+        totals = re.findall(
+            r"(total|grand\s*total|amount\s*due)\s*[:\-]?\s*(₹|\$)?\s*([\d,]+\.\d{2})",
+            raw_text,
+            re.I
+        )
+        if totals:
+            total_amount = f"{totals[-1][1] or ''}{totals[-1][2]}"
 
-        # --------------------
-        # Display
-        # --------------------
+        
         st.success("✅ Invoice processed successfully")
 
+    
         with st.expander("📄 Extracted Details"):
             st.write(f"**Vendor / Company:** {vendor}")
             st.write(f"**Invoice Number:** {invoice_no}")
             st.write(f"**Invoice Date:** {invoice_date}")
             st.write(f"**Due Date:** {due_date}")
-            st.write(f"**Subtotal:** {subtotal}")
-            st.write(f"**Tax:** {tax}")
-            st.write(f"**Total Amount:** {total}")
-            st.write(f"**Phone / Account:** {phone}")
+            st.write(f"**Total Amount:** {total_amount}")
 
             st.markdown("---")
-            st.markdown("### 🔍 Raw OCR Text")
+            st.markdown("**🔍 Raw OCR Text**")
             st.text(raw_text)
 
     except Exception as e:
-        st.error("OCR processing failed safely")
+        st.error("❌ OCR processing failed safely")
         st.code(str(e))
+
+    finally:
+        if os.path.exists(img_path):
+            os.remove(img_path)
+
+
+
+
+
+
+
+
+
