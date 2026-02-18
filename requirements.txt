@@ -1,4 +1,2 @@
-
-pdf2image
 Pillow
 streamlit
