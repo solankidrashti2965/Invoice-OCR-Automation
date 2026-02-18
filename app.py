@@ -2,115 +2,118 @@ import streamlit as st
 from PIL import Image
 import pytesseract
 import re
+import tempfile
+import os
 import pdf2image
-import pdfplumber
-import io
 
 st.set_page_config(page_title="Invoice OCR Automation", layout="centered")
-st.title("📄 Smart Invoice OCR Automation")
+st.title("📄 Invoice OCR Automation")
+st.write("Upload invoice (Image or PDF)")
 
 uploaded = st.file_uploader(
     "Upload Invoice",
     type=["jpg", "jpeg", "png", "pdf"]
 )
 
-# -------------------------------------------------
-# TEXT EXTRACTION (SMART METHOD)
-# -------------------------------------------------
-def extract_text_from_pdf(file):
-    text = ""
-    with pdfplumber.open(file) as pdf:
-        for page in pdf.pages:
-            text += page.extract_text() or ""
-    return text
-
-def extract_text_from_image(image):
-    image = image.convert("L")  # grayscale
-    return pytesseract.image_to_string(
-        image,
-        config="--oem 3 --psm 6"
-    )
-
-# -------------------------------------------------
-# GENERIC FIELD EXTRACTION
-# -------------------------------------------------
-def find_first(patterns, text):
-    for pattern in patterns:
-        match = re.search(pattern, text, re.I)
-        if match:
-            return match.group().strip()
+def extract_amount(keyword, text):
+    pattern = rf"{keyword}.*?(₹|Rs\.?|INR|\$)?\s*([\d,]+\.\d+)"
+    match = re.search(pattern, text, re.I | re.S)
+    if match:
+        symbol = match.group(1) or ""
+        amount = match.group(2)
+        return f"{symbol} {amount}".strip()
     return "Not found"
+
+def extract_date(text, keyword):
+    pattern = rf"{keyword}.*?(\d{{4}}[-/]\d{{2}}[-/]\d{{2}}|\d{{2}}[-/]\d{{2}}[-/]\d{{4}})"
+    match = re.search(pattern, text, re.I)
+    return match.group(1) if match else "Not found"
 
 if uploaded:
 
     try:
-        raw_text = ""
-
-        # ---------------- PDF ----------------
+        # --------------------
+        # Handle PDF
+        # --------------------
         if uploaded.type == "application/pdf":
-            raw_text = extract_text_from_pdf(uploaded)
-
-            # If no text found → fallback to OCR
-            if not raw_text.strip():
-                images = pdf2image.convert_from_bytes(uploaded.read())
-                for img in images:
-                    raw_text += extract_text_from_image(img)
-
-        # ---------------- IMAGE ----------------
+            images = pdf2image.convert_from_bytes(uploaded.read())
+            image = images[0]
         else:
-            image = Image.open(uploaded)
-            st.image(image, width=450)
-            raw_text = extract_text_from_image(image)
+            image = Image.open(uploaded).convert("RGB")
+
+        st.image(image, width=450)
+
+        # OCR
+        raw_text = pytesseract.image_to_string(image, config="--oem 3 --psm 6")
 
         if not raw_text.strip():
-            st.error("❌ No readable text found. Check Tesseract installation.")
+            st.error("No readable text found.")
             st.stop()
 
-        st.success("✅ Text Extracted Successfully")
+        # --------------------
+        # Vendor (top section)
+        # --------------------
+        lines = [l.strip() for l in raw_text.splitlines() if l.strip()]
+        vendor = "Not found"
+        for line in lines[:8]:
+            if not any(k in line.lower() for k in ["invoice", "date", "gst", "total", "tax"]):
+                if len(line) > 4:
+                    vendor = line
+                    break
 
-        # -------------------------------------------------
-        # FIELD PATTERNS (VERY FLEXIBLE)
-        # -------------------------------------------------
-        vendor = raw_text.split("\n")[0]
-
-        invoice_no = find_first([
-            r"invoice\s*(no|number|#)\s*[:\-]?\s*\S+",
+        # --------------------
+        # Invoice Number
+        # --------------------
+        inv_patterns = [
+            r"invoice\s*(no|number|#)\s*[:\-]?\s*([\w\-]+)",
             r"\bINV[-\w]+\b"
-        ], raw_text)
+        ]
 
-        date = find_first([
-            r"\d{4}[-/]\d{2}[-/]\d{2}",
-            r"\d{2}[-/]\d{2}[-/]\d{4}",
-            r"\d{2}\s+[A-Za-z]+\s+\d{4}"
-        ], raw_text)
+        invoice_no = "Not found"
+        for p in inv_patterns:
+            m = re.search(p, raw_text, re.I)
+            if m:
+                invoice_no = m.group(2) if len(m.groups()) > 1 else m.group(0)
+                break
 
-        total = find_first([
-            r"(grand\s*total|total\s*amount|amount\s*due)[^\d]{0,10}[\d,]+\.?\d*"
-        ], raw_text)
+        # --------------------
+        # Dates
+        # --------------------
+        invoice_date = extract_date(raw_text, "invoice date")
+        due_date = extract_date(raw_text, "due date")
 
-        tax = find_first([
-            r"(gst|vat|tax)[^\d]{0,10}[\d,]+\.?\d*"
-        ], raw_text)
+        # --------------------
+        # Subtotal / Tax / Total
+        # --------------------
+        subtotal = extract_amount("subtotal|taxable amount", raw_text)
+        tax = extract_amount("tax|gst|igst|cgst|sgst", raw_text)
+        total = extract_amount("grand total|total amount|amount due|total", raw_text)
 
-        phone = find_first([
-            r"\+?\d[\d\s\-]{8,15}\d"
-        ], raw_text)
+        # --------------------
+        # Phone
+        # --------------------
+        phone_match = re.search(r"\b\d{10}\b", raw_text)
+        phone = phone_match.group() if phone_match else "Not found"
 
-        # -------------------------------------------------
-        # DISPLAY
-        # -------------------------------------------------
+        # --------------------
+        # Display
+        # --------------------
+        st.success("✅ Invoice processed successfully")
+
         with st.expander("📄 Extracted Details"):
-            st.write("**Vendor:**", vendor)
-            st.write("**Invoice Number:**", invoice_no)
-            st.write("**Date:**", date)
-            st.write("**Total:**", total)
-            st.write("**Tax:**", tax)
-            st.write("**Phone:**", phone)
+            st.write(f"**Vendor / Company:** {vendor}")
+            st.write(f"**Invoice Number:** {invoice_no}")
+            st.write(f"**Invoice Date:** {invoice_date}")
+            st.write(f"**Due Date:** {due_date}")
+            st.write(f"**Subtotal:** {subtotal}")
+            st.write(f"**Tax:** {tax}")
+            st.write(f"**Total Amount:** {total}")
+            st.write(f"**Phone / Account:** {phone}")
 
             st.markdown("---")
-            st.markdown("### 🔍 Raw Text")
+            st.markdown("### 🔍 Raw OCR Text")
             st.text(raw_text)
 
     except Exception as e:
-        st.error("Processing Failed")
+        st.error("OCR processing failed safely")
         st.code(str(e))
