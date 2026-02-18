@@ -1,3 +1,5 @@
-pdf2image
+streamlit
+pillow
 pytesseract
-Pillow
+pdf2image
+openai
