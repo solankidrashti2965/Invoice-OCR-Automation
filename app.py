@@ -16,13 +16,12 @@ uploaded_file = st.file_uploader(
 )
 
 # ----------------------------------------
-# SMART FIELD EXTRACTION
+# SMART EXTRACTION FUNCTION
 # ----------------------------------------
 def extract_fields(text):
 
-    raw_text = text
-    text = text.replace("\n", " ")
-    text = re.sub(r'\s+', ' ', text)
+    raw_lines = text.splitlines()
+    clean_text = re.sub(r'\s+', ' ', text)
 
     data = {
         "Vendor Name": "Not found",
@@ -35,78 +34,70 @@ def extract_fields(text):
         "Phone / Account": "Not found"
     }
 
-    # ---------------- Invoice Number ----------------
-    inv_match = re.search(
-        r'(Invoice\s*(No|Number|#)?\s*[:\-]?\s*)([A-Z0-9\-\/]+)',
-        text,
-        re.I
-    )
-
-    if inv_match:
-        candidate = inv_match.group(3)
-
-        # avoid picking wrong words like BILL
-        if len(candidate) > 4:
-            data["Invoice Number"] = candidate
-
-    # ---------------- Dates ----------------
-    dates = re.findall(r'\b\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}\b', text)
-
-    if len(dates) >= 1:
-        data["Invoice Date"] = dates[0]
-
-    if len(dates) >= 2:
-        data["Due Date"] = dates[1]
-
-    # ---------------- Tax ----------------
-    tax_match = re.search(
-        r'(GST|Tax|IGST|CGST|SGST)[^\d]*(\d+\.\d{2})',
-        text,
-        re.I
-    )
-    if tax_match:
-        data["Tax"] = tax_match.group(2)
-
-    # ---------------- Amount Detection ----------------
-    amounts = re.findall(r'\b\d+\.\d{2}\b', text)
-
-    clean_amounts = []
-
-    for amt in amounts:
-        try:
-            value = float(amt)
-
-            if value > 10:  # filter junk
-                clean_amounts.append(value)
-
-        except:
-            continue
-
-    if clean_amounts:
-        clean_amounts.sort()
-        data["Total Amount"] = str(clean_amounts[-1])
-
-        if len(clean_amounts) >= 2:
-            data["Subtotal"] = str(clean_amounts[-2])
-
-    # ---------------- Phone ----------------
-    phone_match = re.search(r'\b\d{10}\b', text)
-    if phone_match:
-        data["Phone / Account"] = phone_match.group()
-
-    # ---------------- Vendor Name (Improved Logic) ----------------
-    lines = raw_text.splitlines()
-
-    for line in lines[:10]:
+    # ---------------- Vendor Name ----------------
+    for line in raw_lines[:15]:
         line = line.strip()
 
         if (
             len(line) > 5
-            and not re.search(r'invoice|bill|tax|date|gst|total|amount', line, re.I)
+            and not re.search(r'invoice|tax|bill|original|date|gst|total', line, re.I)
             and not re.search(r'\d{4,}', line)
         ):
             data["Vendor Name"] = line
             break
+
+    # ---------------- Invoice Number ----------------
+    inv_match = re.search(
+        r'Invoice\s*(No|Number|#)?\s*[:\-]?\s*([A-Z0-9\-\/]{5,})',
+        clean_text,
+        re.I
+    )
+
+    if inv_match:
+        data["Invoice Number"] = inv_match.group(2)
+
+    # ---------------- Date Detection ----------------
+    # Format: 04/12/2023 or 04-12-2023 or 04.12.2023
+    date_match1 = re.search(
+        r'\b\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}\b',
+        clean_text
+    )
+
+    # Format: 04 Dec 2023
+    date_match2 = re.search(
+        r'\b\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}\b',
+        clean_text
+    )
+
+    if date_match1:
+        data["Invoice Date"] = date_match1.group()
+    elif date_match2:
+        data["Invoice Date"] = date_match2.group()
+
+    # ---------------- Total (Keyword Based) ----------------
+    total_match = re.search(
+        r'(Grand\s*Total|Total\s*Amount|Amount\s*Payable|Total)[^\d]*(\d+\.\d{2})',
+        clean_text,
+        re.I
+    )
+
+    if total_match:
+        data["Total Amount"] = total_match.group(2)
+
+    # ---------------- Tax ----------------
+    tax_match = re.search(
+        r'(GST|Tax)[^\d]*(\d+\.\d{2})',
+        clean_text,
+        re.I
+    )
+
+    if tax_match:
+        data["Tax"] = tax_match.group(2)
+
+    # ---------------- Phone ----------------
+    phone_match = re.search(r'\b\d{10}\b', clean_text)
+    if phone_match:
+        data["Phone / Account"] = phone_match.group()
 
     return data
 
