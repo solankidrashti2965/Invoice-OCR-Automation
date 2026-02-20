@@ -2,7 +2,6 @@ import streamlit as st
 from PIL import Image
 import pytesseract
 import re
-import cv2
 import numpy as np
 from pdf2image import convert_from_bytes
 
@@ -17,23 +16,11 @@ uploaded_file = st.file_uploader(
 )
 
 # ----------------------------------------
-# IMAGE PREPROCESSING (Improves OCR 40%)
-# ----------------------------------------
-def preprocess_image(pil_image):
-    img = np.array(pil_image)
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    blur = cv2.GaussianBlur(gray, (5, 5), 0)
-    thresh = cv2.threshold(blur, 0, 255,
-                           cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
-    return thresh
-
-
-# ----------------------------------------
 # SMART FIELD EXTRACTION FUNCTION
 # ----------------------------------------
 def extract_fields(text):
 
-    # Clean OCR text
+    # Clean text
     text = text.replace("\n", " ")
     text = re.sub(r'\s+', ' ', text)
 
@@ -48,81 +35,59 @@ def extract_fields(text):
         "Phone / Account": "Not found"
     }
 
-    # ---------------- Vendor Name ----------------
-    lines = text.split(" ")
-    if len(lines) > 3:
-        data["Vendor Name"] = " ".join(lines[:3])
-
     # ---------------- Invoice Number ----------------
     inv_match = re.search(
-        r'(Invoice\s*(No|Number|#)?\s*[:\-]?\s*)([A-Z0-9\-]+)',
+        r'(Invoice|Bill)\s*(No|Number|#)?\s*[:\-]?\s*([A-Z0-9\-\/]+)',
         text,
         re.I
     )
     if inv_match:
         data["Invoice Number"] = inv_match.group(3)
 
-    # ---------------- Invoice Date ----------------
-    date_match = re.search(
-        r'(Invoice\s*Date\s*[:\-]?\s*)(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})',
-        text,
-        re.I
+    # ---------------- Dates (Flexible) ----------------
+    dates = re.findall(
+        r'\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}',
+        text
     )
-    if date_match:
-        data["Invoice Date"] = date_match.group(2)
-    else:
-        any_date = re.search(
-            r'(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})',
-            text
-        )
-        if any_date:
-            data["Invoice Date"] = any_date.group(1)
 
-    # ---------------- Due Date ----------------
-    due_match = re.search(
-        r'(Due\s*Date|Payment\s*Due)\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})',
-        text,
-        re.I
-    )
-    if due_match:
-        data["Due Date"] = due_match.group(2)
+    if len(dates) >= 1:
+        data["Invoice Date"] = dates[0]
 
-    # ---------------- Subtotal ----------------
-    sub_match = re.search(
-        r'(Sub\s*Total)\s*[:\-]?\s*(₹|\$)?\s*([\d,]+\.\d{2})',
-        text,
-        re.I
-    )
-    if sub_match:
-        data["Subtotal"] = sub_match.group(3)
+    if len(dates) >= 2:
+        data["Due Date"] = dates[1]
 
     # ---------------- Tax ----------------
     tax_match = re.search(
-        r'(Tax|GST|IGST|CGST|SGST)\s*[:\-]?\s*(₹|\$)?\s*([\d,]+\.\d{2})',
+        r'(GST|Tax|IGST|CGST|SGST)[^\d]*(\d+[.,]?\d*)',
         text,
         re.I
     )
     if tax_match:
-        data["Tax"] = tax_match.group(3)
+        data["Tax"] = tax_match.group(2)
 
-    # ---------------- Smart Total Detection ----------------
-    amounts = re.findall(r'[\d,]+\.\d{2}', text)
+    # ---------------- Amount Logic ----------------
+    amounts = re.findall(r'\d+[.,]?\d*\.\d{1,2}', text)
 
     if amounts:
-        clean_amounts = [float(a.replace(",", "")) for a in amounts]
+        amounts = [float(a.replace(",", "")) for a in amounts]
+        amounts_sorted = sorted(amounts)
 
-        # remove small values like tax
-        large_values = [a for a in clean_amounts if a > 50]
+        # Largest = Total
+        data["Total Amount"] = str(amounts_sorted[-1])
 
-        if large_values:
-            data["Total Amount"] = str(max(large_values))
-        else:
-            data["Total Amount"] = str(max(clean_amounts))
+        # Second Largest = Subtotal (if exists)
+        if len(amounts_sorted) >= 2:
+            data["Subtotal"] = str(amounts_sorted[-2])
 
     # ---------------- Phone ----------------
-    phone_match = re.search(r'\b\d{10,}\b', text)
+    phone_match = re.search(r'\b\d{10}\b', text)
     if phone_match:
         data["Phone / Account"] = phone_match.group()
+
+    # ---------------- Vendor Name ----------------
+    words = text.split()
+    if len(words) >= 3:
+        data["Vendor Name"] = " ".join(words[:3])
 
     return data
 
@@ -139,7 +104,6 @@ if uploaded_file:
         if uploaded_file.type == "application/pdf":
             images = convert_from_bytes(uploaded_file.read())
             for img in images:
-                img = preprocess_image(img)
                 text += pytesseract.image_to_string(
                     img,
                     config="--psm 6"
@@ -150,10 +114,8 @@ if uploaded_file:
             image = Image.open(uploaded_file).convert("RGB")
             st.image(image, width=450)
 
-            processed = preprocess_image(image)
-
             text = pytesseract.image_to_string(
-                processed,
+                image,
                 config="--psm 6"
             )
 
