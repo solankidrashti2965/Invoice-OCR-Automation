@@ -16,10 +16,11 @@ uploaded_file = st.file_uploader(
 )
 
 # ----------------------------------------
-# SMART FIELD EXTRACTION FUNCTION
+# SMART FIELD EXTRACTION
 # ----------------------------------------
 def extract_fields(text):
 
+    raw_text = text
     text = text.replace("\n", " ")
     text = re.sub(r'\s+', ' ', text)
 
@@ -36,12 +37,17 @@ def extract_fields(text):
 
     # ---------------- Invoice Number ----------------
     inv_match = re.search(
-        r'(Invoice|Bill)\s*(No|Number|#)?\s*[:\-]?\s*([A-Z0-9\-\/]+)',
+        r'(Invoice\s*(No|Number|#)?\s*[:\-]?\s*)([A-Z0-9\-\/]+)',
         text,
         re.I
     )
+
     if inv_match:
-        data["Invoice Number"] = inv_match.group(3)
+        candidate = inv_match.group(3)
+
+        # avoid picking wrong words like BILL
+        if len(candidate) > 4:
+            data["Invoice Number"] = candidate
 
     # ---------------- Dates ----------------
     dates = re.findall(r'\b\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}\b', text)
@@ -61,7 +67,7 @@ def extract_fields(text):
     if tax_match:
         data["Tax"] = tax_match.group(2)
 
-    # ---------------- SAFE Amount Detection ----------------
+    # ---------------- Amount Detection ----------------
     amounts = re.findall(r'\b\d+\.\d{2}\b', text)
 
     clean_amounts = []
@@ -70,8 +76,7 @@ def extract_fields(text):
         try:
             value = float(amt)
 
-            # Ignore small values (avoid dates like 04.12)
-            if value > 10:
+            if value > 10:  # filter junk
                 clean_amounts.append(value)
 
         except:
@@ -79,11 +84,8 @@ def extract_fields(text):
 
     if clean_amounts:
         clean_amounts.sort()
-
-        # Largest = Total
         data["Total Amount"] = str(clean_amounts[-1])
 
-        # Second Largest = Subtotal (if exists)
         if len(clean_amounts) >= 2:
             data["Subtotal"] = str(clean_amounts[-2])
 
@@ -92,10 +94,19 @@ def extract_fields(text):
     if phone_match:
         data["Phone / Account"] = phone_match.group()
 
-    # ---------------- Vendor Name ----------------
-    words = text.split()
-    if len(words) >= 3:
-        data["Vendor Name"] = " ".join(words[:3])
+    # ---------------- Vendor Name (Improved Logic) ----------------
+    lines = raw_text.splitlines()
+
+    for line in lines[:10]:
+        line = line.strip()
+
+        if (
+            len(line) > 5
+            and not re.search(r'invoice|bill|tax|date|gst|total|amount', line, re.I)
+            and not re.search(r'\d{4,}', line)
+        ):
+            data["Vendor Name"] = line
+            break
 
     return data
 
@@ -108,7 +119,7 @@ if uploaded_file:
     try:
         text = ""
 
-        # -------- Handle PDF --------
+        # -------- PDF --------
         if uploaded_file.type == "application/pdf":
 
             pdf_reader = PyPDF2.PdfReader(io.BytesIO(uploaded_file.read()))
@@ -118,7 +129,7 @@ if uploaded_file:
                 if page_text:
                     text += page_text
 
-        # -------- Handle Image --------
+        # -------- IMAGE --------
         else:
             image = Image.open(uploaded_file).convert("RGB")
             st.image(image, width=450)
