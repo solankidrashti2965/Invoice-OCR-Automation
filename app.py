@@ -2,8 +2,8 @@ import streamlit as st
 from PIL import Image
 import pytesseract
 import re
-import numpy as np
-from pdf2image import convert_from_bytes
+import PyPDF2
+import io
 
 st.set_page_config(page_title="Invoice OCR Automation", layout="centered")
 
@@ -16,11 +16,10 @@ uploaded_file = st.file_uploader(
 )
 
 # ----------------------------------------
-# SMART FIELD EXTRACTION FUNCTION
+# FIELD EXTRACTION FUNCTION
 # ----------------------------------------
 def extract_fields(text):
 
-    # Clean text
     text = text.replace("\n", " ")
     text = re.sub(r'\s+', ' ', text)
 
@@ -35,7 +34,7 @@ def extract_fields(text):
         "Phone / Account": "Not found"
     }
 
-    # ---------------- Invoice Number ----------------
+    # Invoice Number
     inv_match = re.search(
         r'(Invoice|Bill)\s*(No|Number|#)?\s*[:\-]?\s*([A-Z0-9\-\/]+)',
         text,
@@ -44,19 +43,14 @@ def extract_fields(text):
     if inv_match:
         data["Invoice Number"] = inv_match.group(3)
 
-    # ---------------- Dates (Flexible) ----------------
-    dates = re.findall(
-        r'\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}',
-        text
-    )
-
+    # Dates
+    dates = re.findall(r'\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}', text)
     if len(dates) >= 1:
         data["Invoice Date"] = dates[0]
-
     if len(dates) >= 2:
         data["Due Date"] = dates[1]
 
-    # ---------------- Tax ----------------
+    # Tax
     tax_match = re.search(
         r'(GST|Tax|IGST|CGST|SGST)[^\d]*(\d+[.,]?\d*)',
         text,
@@ -65,26 +59,21 @@ def extract_fields(text):
     if tax_match:
         data["Tax"] = tax_match.group(2)
 
-    # ---------------- Amount Logic ----------------
+    # Amount detection
     amounts = re.findall(r'\d+[.,]?\d*\.\d{1,2}', text)
-
     if amounts:
         amounts = [float(a.replace(",", "")) for a in amounts]
         amounts_sorted = sorted(amounts)
-
-        # Largest = Total
         data["Total Amount"] = str(amounts_sorted[-1])
-
-        # Second Largest = Subtotal (if exists)
         if len(amounts_sorted) >= 2:
             data["Subtotal"] = str(amounts_sorted[-2])
 
-    # ---------------- Phone ----------------
+    # Phone
     phone_match = re.search(r'\b\d{10}\b', text)
     if phone_match:
         data["Phone / Account"] = phone_match.group()
 
-    # ---------------- Vendor Name ----------------
+    # Vendor
     words = text.split()
     if len(words) >= 3:
         data["Vendor Name"] = " ".join(words[:3])
@@ -102,22 +91,25 @@ if uploaded_file:
 
         # -------- Handle PDF --------
         if uploaded_file.type == "application/pdf":
-            images = convert_from_bytes(uploaded_file.read())
-            for img in images:
-                text += pytesseract.image_to_string(
-                    img,
-                    config="--psm 6"
-                )
+
+            pdf_reader = PyPDF2.PdfReader(io.BytesIO(uploaded_file.read()))
+
+            for page in pdf_reader.pages:
+                text += page.extract_text() or ""
+
+            # If no text extracted → fallback to OCR
+            if not text.strip():
+                st.warning("Text-based extraction failed. Trying OCR...")
+                uploaded_file.seek(0)
+                images = convert_from_bytes(uploaded_file.read())
+                for img in images:
+                    text += pytesseract.image_to_string(img, config="--psm 6")
 
         # -------- Handle Image --------
         else:
             image = Image.open(uploaded_file).convert("RGB")
             st.image(image, width=450)
-
-            text = pytesseract.image_to_string(
-                image,
-                config="--psm 6"
-            )
+            text = pytesseract.image_to_string(image, config="--psm 6")
 
         if not text.strip():
             st.error("❌ No readable text found.")
@@ -132,9 +124,9 @@ if uploaded_file:
                 st.write(f"**{k}:** {v}")
 
             st.markdown("---")
-            st.markdown("🔍 Raw OCR Text")
+            st.markdown("🔍 Raw Extracted Text")
             st.text(text)
 
     except Exception as e:
-        st.error("❌ OCR processing failed safely")
+        st.error("❌ Processing failed")
         st.code(str(e))
