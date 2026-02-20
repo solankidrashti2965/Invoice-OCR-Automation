@@ -1,5 +1,4 @@
 streamlit
 pytesseract
-pdf2image
+PyPDF2
 Pillow
-numpy
