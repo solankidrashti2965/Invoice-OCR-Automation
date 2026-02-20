@@ -16,11 +16,12 @@ uploaded_file = st.file_uploader(
 )
 
 # ----------------------------------------
-# SMART LINE-BASED EXTRACTION
+# SMART EXTRACTION FUNCTION
 # ----------------------------------------
 def extract_fields(text):
 
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    raw_lines = text.splitlines()
+    clean_text = re.sub(r'\s+', ' ', text)
 
     data = {
         "Vendor Name": "Not found",
@@ -34,7 +35,9 @@ def extract_fields(text):
     }
 
     # ---------------- Vendor Name ----------------
-    for line in lines[:10]:
+    for line in raw_lines[:15]:
+        line = line.strip()
+
         if (
             len(line) > 5
             and not re.search(r'invoice|tax|bill|original|date|gst|total', line, re.I)
@@ -44,54 +47,57 @@ def extract_fields(text):
             break
 
     # ---------------- Invoice Number ----------------
-    for line in lines:
-        if re.search(r'invoice', line, re.I):
-            match = re.search(r'([A-Z0-9\-\/]{5,})', line)
-            if match and match.group(1).lower() not in ["original"]:
-                data["Invoice Number"] = match.group(1)
-                break
+    inv_match = re.search(
+        r'Invoice\s*(No|Number|#)?\s*[:\-]?\s*([A-Z0-9\-\/]{5,})',
+        clean_text,
+        re.I
+    )
 
-    # ---------------- Date ----------------
-    for line in lines:
-        date_match = re.search(r'\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}', line)
-        if date_match:
-            data["Invoice Date"] = date_match.group()
-            break
+    if inv_match:
+        data["Invoice Number"] = inv_match.group(2)
 
-        date_match2 = re.search(r'\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}', line)
-        if date_match2:
-            data["Invoice Date"] = date_match2.group()
-            break
+    # ---------------- Date Detection ----------------
+    # Format: 04/12/2023 or 04-12-2023 or 04.12.2023
+    date_match1 = re.search(
+        r'\b\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}\b',
+        clean_text
+    )
+
+    # Format: 04 Dec 2023
+    date_match2 = re.search(
+        r'\b\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}\b',
+        clean_text
+    )
+
+    if date_match1:
+        data["Invoice Date"] = date_match1.group()
+    elif date_match2:
+        data["Invoice Date"] = date_match2.group()
+
+    # ---------------- Total (Keyword Based) ----------------
+    total_match = re.search(
+        r'(Grand\s*Total|Total\s*Amount|Amount\s*Payable|Total)[^\d]*(\d+\.\d{2})',
+        clean_text,
+        re.I
+    )
+
+    if total_match:
+        data["Total Amount"] = total_match.group(2)
 
     # ---------------- Tax ----------------
-    for line in lines:
-        if re.search(r'gst|tax', line, re.I):
-            match = re.search(r'\d+\.\d{2}', line)
-            if match:
-                data["Tax"] = match.group()
-                break
+    tax_match = re.search(
+        r'(GST|Tax)[^\d]*(\d+\.\d{2})',
+        clean_text,
+        re.I
+    )
 
-    # ---------------- Total (VERY IMPORTANT) ----------------
-    for line in lines:
-        if re.search(r'grand total|total amount|amount payable|total$', line, re.I):
-            match = re.search(r'\d+\.\d{2}', line)
-            if match:
-                data["Total Amount"] = match.group()
-                break
-
-    # Fallback → pick largest value
-    if data["Total Amount"] == "Not found":
-        amounts = re.findall(r'\d+\.\d{2}', text)
-        if amounts:
-            values = [float(a) for a in amounts]
-            data["Total Amount"] = str(max(values))
+    if tax_match:
+        data["Tax"] = tax_match.group(2)
 
     # ---------------- Phone ----------------
-    for line in lines:
-        phone_match = re.search(r'\b\d{10}\b', line)
-        if phone_match:
-            data["Phone / Account"] = phone_match.group()
-            break
+    phone_match = re.search(r'\b\d{10}\b', clean_text)
+    if phone_match:
+        data["Phone / Account"] = phone_match.group()
 
     return data
 
@@ -104,15 +110,17 @@ if uploaded_file:
     try:
         text = ""
 
-        # PDF
+        # -------- PDF --------
         if uploaded_file.type == "application/pdf":
+
             pdf_reader = PyPDF2.PdfReader(io.BytesIO(uploaded_file.read()))
+
             for page in pdf_reader.pages:
                 page_text = page.extract_text()
                 if page_text:
                     text += page_text
 
-        # IMAGE
+        # -------- IMAGE --------
         else:
             image = Image.open(uploaded_file).convert("RGB")
             st.image(image, width=450)
