@@ -1,33 +1,1005 @@
-from flask import Flask, request, jsonify
-from PIL import Image
-import pytesseract
-import json
-import os
-from pathlib import Path
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>InvoiceScan — Intelligent OCR Extraction</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0a0a0f;
+    --surface: #111118;
+    --surface2: #16161f;
+    --border: #1e1e2e;
+    --accent: #7c6af7;
+    --accent2: #a78bfa;
+    --accent-glow: rgba(124,106,247,0.15);
+    --green: #34d399;
+    --yellow: #fbbf24;
+    --red: #f87171;
+    --text: #e2e8f0;
+    --muted: #64748b;
+    --subtle: #1e1e2e;
+  }
 
-app = Flask(__name__)
+  * { margin: 0; padding: 0; box-sizing: border-box; }
 
-@app.route("/")
-def home():
-    return "Invoice OCR Automation is running!"
+  body {
+    font-family: 'Syne', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
 
-@app.route("/upload", methods=["POST"])
-def upload_invoice():
-    if "file" not in request.files:
-        return jsonify({"error": "No file uploaded"}), 400
+  /* Background grid */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(124,106,247,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(124,106,247,0.03) 1px, transparent 1px);
+    background-size: 48px 48px;
+    pointer-events: none;
+    z-index: 0;
+  }
 
-    file = request.files["file"]
-    img_path = "temp_invoice.jpg"
-    file.save(img_path)
+  /* Glow orb */
+  body::after {
+    content: '';
+    position: fixed;
+    top: -30vh;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 80vw;
+    height: 60vh;
+    background: radial-gradient(ellipse, rgba(124,106,247,0.12) 0%, transparent 70%);
+    pointer-events: none;
+    z-index: 0;
+  }
 
-    img = Image.open(img_path)
-    text = pytesseract.image_to_string(img)
+  .container {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 0 24px;
+    position: relative;
+    z-index: 1;
+  }
 
-    os.remove(img_path)
+  /* Header */
+  header {
+    padding: 36px 0 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
 
-    return jsonify({
-        "ocr_text": text
-    })
+  .logo {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+  .logo-icon {
+    width: 40px;
+    height: 40px;
+    background: linear-gradient(135deg, var(--accent), #a78bfa);
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+  }
+
+  .logo-text {
+    font-size: 20px;
+    font-weight: 800;
+    letter-spacing: -0.5px;
+  }
+
+  .logo-text span {
+    color: var(--accent2);
+  }
+
+  .badge {
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    padding: 4px 10px;
+    border-radius: 20px;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    letter-spacing: 0.5px;
+  }
+
+  /* Hero */
+  .hero {
+    text-align: center;
+    padding: 48px 0 40px;
+  }
+
+  .hero-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    color: var(--accent2);
+    border: 1px solid rgba(124,106,247,0.3);
+    background: var(--accent-glow);
+    padding: 5px 14px;
+    border-radius: 20px;
+    margin-bottom: 24px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+  }
+
+  .hero-tag::before {
+    content: '';
+    width: 6px;
+    height: 6px;
+    background: var(--accent);
+    border-radius: 50%;
+    animation: pulse-dot 2s infinite;
+  }
+
+  @keyframes pulse-dot {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.5; transform: scale(0.8); }
+  }
+
+  h1 {
+    font-size: clamp(36px, 6vw, 64px);
+    font-weight: 800;
+    line-height: 1.05;
+    letter-spacing: -2px;
+    margin-bottom: 16px;
+  }
+
+  h1 em {
+    font-style: normal;
+    background: linear-gradient(135deg, var(--accent), var(--accent2), #c4b5fd);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .hero p {
+    color: var(--muted);
+    font-size: 16px;
+    max-width: 480px;
+    margin: 0 auto;
+    line-height: 1.6;
+    font-weight: 400;
+  }
+
+  /* Upload zone */
+  .upload-section {
+    margin: 32px 0;
+  }
+
+  .drop-zone {
+    border: 2px dashed var(--border);
+    border-radius: 20px;
+    padding: 56px 32px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    background: var(--surface);
+    position: relative;
+    overflow: hidden;
+  }
+
+  .drop-zone::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(ellipse at center, var(--accent-glow), transparent 70%);
+    opacity: 0;
+    transition: opacity 0.3s;
+  }
+
+  .drop-zone:hover::before,
+  .drop-zone.active::before { opacity: 1; }
+
+  .drop-zone:hover,
+  .drop-zone.active {
+    border-color: var(--accent);
+    background: var(--surface2);
+  }
+
+  .drop-zone.active {
+    border-style: solid;
+  }
+
+  .upload-icon {
+    width: 64px;
+    height: 64px;
+    margin: 0 auto 20px;
+    background: linear-gradient(135deg, rgba(124,106,247,0.2), rgba(167,139,250,0.1));
+    border: 1px solid rgba(124,106,247,0.3);
+    border-radius: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 28px;
+    transition: transform 0.3s;
+  }
+
+  .drop-zone:hover .upload-icon { transform: translateY(-4px); }
+
+  .drop-zone h3 {
+    font-size: 18px;
+    font-weight: 700;
+    margin-bottom: 8px;
+    color: var(--text);
+  }
+
+  .drop-zone p {
+    color: var(--muted);
+    font-size: 14px;
+  }
+
+  .drop-zone p span {
+    color: var(--accent2);
+    font-weight: 600;
+  }
+
+  .file-types {
+    display: flex;
+    gap: 8px;
+    justify-content: center;
+    margin-top: 20px;
+    flex-wrap: wrap;
+  }
+
+  .file-type-badge {
+    font-family: 'DM Mono', monospace;
+    font-size: 10px;
+    padding: 3px 8px;
+    border-radius: 4px;
+    background: var(--subtle);
+    color: var(--muted);
+    letter-spacing: 0.5px;
+    border: 1px solid var(--border);
+  }
+
+  #fileInput { display: none; }
+
+  /* Preview */
+  .preview-area {
+    display: none;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 20px;
+    margin-top: 16px;
+  }
+
+  .preview-area.show { display: flex; align-items: center; gap: 16px; }
+
+  .preview-thumb {
+    width: 72px;
+    height: 72px;
+    object-fit: cover;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+
+  .preview-info { flex: 1; min-width: 0; }
+
+  .preview-info .filename {
+    font-weight: 600;
+    font-size: 14px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .preview-info .filesize {
+    font-family: 'DM Mono', monospace;
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 3px;
+  }
+
+  /* Extract button */
+  .btn-extract {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    width: 100%;
+    padding: 18px;
+    background: linear-gradient(135deg, var(--accent), #a78bfa);
+    color: white;
+    border: none;
+    border-radius: 14px;
+    font-family: 'Syne', sans-serif;
+    font-size: 16px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.3s;
+    margin-top: 16px;
+    position: relative;
+    overflow: hidden;
+    letter-spacing: 0.3px;
+  }
+
+  .btn-extract::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(135deg, rgba(255,255,255,0.15), transparent);
+    opacity: 0;
+    transition: opacity 0.3s;
+  }
+
+  .btn-extract:hover::before { opacity: 1; }
+  .btn-extract:hover { transform: translateY(-2px); box-shadow: 0 8px 32px rgba(124,106,247,0.4); }
+  .btn-extract:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+  /* Loading state */
+  .loading-bar {
+    display: none;
+    height: 3px;
+    background: var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+    margin-top: 16px;
+  }
+
+  .loading-bar.show { display: block; }
+
+  .loading-bar-inner {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent), var(--accent2));
+    width: 30%;
+    border-radius: 4px;
+    animation: loading-slide 1.5s ease-in-out infinite;
+  }
+
+  @keyframes loading-slide {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(430%); }
+  }
+
+  .loading-text {
+    text-align: center;
+    color: var(--muted);
+    font-size: 14px;
+    margin-top: 10px;
+    display: none;
+    font-family: 'DM Mono', monospace;
+  }
+
+  .loading-text.show { display: block; }
+
+  /* Results */
+  #results {
+    display: none;
+    margin-top: 32px;
+    animation: fadeUp 0.5s ease;
+  }
+
+  #results.show { display: block; }
+
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .results-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 20px;
+    flex-wrap: gap;
+    gap: 12px;
+  }
+
+  .results-title {
+    font-size: 20px;
+    font-weight: 800;
+    letter-spacing: -0.5px;
+  }
+
+  .confidence-badge {
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    padding: 5px 12px;
+    border-radius: 20px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .confidence-high { background: rgba(52,211,153,0.1); color: var(--green); border: 1px solid rgba(52,211,153,0.3); }
+  .confidence-medium { background: rgba(251,191,36,0.1); color: var(--yellow); border: 1px solid rgba(251,191,36,0.3); }
+  .confidence-low { background: rgba(248,113,113,0.1); color: var(--red); border: 1px solid rgba(248,113,113,0.3); }
+
+  /* Grid layout for fields */
+  .fields-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+
+  .field-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+    transition: border-color 0.2s;
+  }
+
+  .field-card:hover { border-color: rgba(124,106,247,0.4); }
+
+  .field-card.full-width { grid-column: 1 / -1; }
+
+  .field-label {
+    font-family: 'DM Mono', monospace;
+    font-size: 10px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 6px;
+  }
+
+  .field-value {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text);
+    word-break: break-word;
+  }
+
+  .field-value.null-val {
+    color: var(--muted);
+    font-style: italic;
+    font-weight: 400;
+    font-family: 'DM Mono', monospace;
+    font-size: 13px;
+  }
+
+  .field-value.total-val {
+    font-size: 22px;
+    font-weight: 800;
+    color: var(--accent2);
+    letter-spacing: -0.5px;
+  }
+
+  /* Section headers */
+  .section-label {
+    font-family: 'DM Mono', monospace;
+    font-size: 10px;
+    color: var(--accent2);
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    margin: 24px 0 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .section-label::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+  }
+
+  /* Line items table */
+  .line-items-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+  }
+
+  .line-items-table th {
+    font-family: 'DM Mono', monospace;
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    text-align: left;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .line-items-table td {
+    padding: 12px 12px;
+    border-bottom: 1px solid rgba(30,30,46,0.5);
+    color: var(--text);
+  }
+
+  .line-items-table tr:last-child td { border-bottom: none; }
+
+  .line-items-table tr:hover td {
+    background: var(--surface2);
+  }
+
+  .table-wrap {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+
+  /* Actions */
+  .result-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 20px;
+    flex-wrap: wrap;
+  }
+
+  .btn-action {
+    flex: 1;
+    min-width: 140px;
+    padding: 12px 20px;
+    border-radius: 10px;
+    font-family: 'Syne', sans-serif;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+  }
+
+  .btn-action.primary {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text);
+  }
+
+  .btn-action.primary:hover {
+    border-color: var(--accent);
+    color: var(--accent2);
+  }
+
+  .btn-action.secondary {
+    background: var(--accent-glow);
+    border: 1px solid rgba(124,106,247,0.3);
+    color: var(--accent2);
+  }
+
+  .btn-action.secondary:hover {
+    background: rgba(124,106,247,0.2);
+  }
+
+  /* Error */
+  .error-box {
+    display: none;
+    background: rgba(248,113,113,0.08);
+    border: 1px solid rgba(248,113,113,0.3);
+    border-radius: 12px;
+    padding: 16px 20px;
+    color: var(--red);
+    margin-top: 16px;
+    font-size: 14px;
+  }
+
+  .error-box.show { display: block; }
+
+  /* Divider */
+  .divider {
+    height: 1px;
+    background: var(--border);
+    margin: 32px 0;
+  }
+
+  /* JSON view */
+  .json-toggle {
+    display: none;
+    margin-top: 20px;
+  }
+
+  .json-toggle.show { display: block; }
+
+  .json-pre {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    overflow: auto;
+    font-family: 'DM Mono', monospace;
+    font-size: 12px;
+    line-height: 1.7;
+    color: #a9b1d6;
+    max-height: 420px;
+    margin-top: 12px;
+  }
+
+  .json-key { color: #7c6af7; }
+  .json-str { color: #9ece6a; }
+  .json-num { color: #ff9e64; }
+  .json-null { color: #565f89; }
+
+  .toggle-json-btn {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    padding: 8px 16px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-family: 'DM Mono', monospace;
+    font-size: 12px;
+    transition: all 0.2s;
+  }
+
+  .toggle-json-btn:hover {
+    border-color: var(--accent);
+    color: var(--accent2);
+  }
+
+  /* Toast */
+  .toast {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 20px;
+    font-size: 14px;
+    font-weight: 500;
+    z-index: 100;
+    transform: translateY(80px);
+    opacity: 0;
+    transition: all 0.3s;
+    pointer-events: none;
+  }
+
+  .toast.show {
+    transform: translateY(0);
+    opacity: 1;
+  }
+
+  /* Responsive */
+  @media (max-width: 600px) {
+    .fields-grid { grid-template-columns: 1fr; }
+    h1 { font-size: 32px; letter-spacing: -1px; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <div class="logo">
+      <div class="logo-icon">🧾</div>
+      <div class="logo-text">Invoice<span>Scan</span></div>
+    </div>
+    <div class="badge">AI-POWERED OCR</div>
+  </header>
+
+  <div class="hero">
+    <div class="hero-tag">Claude Vision · Structured Extraction</div>
+    <h1>Extract Any Invoice<br><em>Instantly & Accurately</em></h1>
+    <p>Upload any invoice — scanned, photographed, or digital — and get clean structured data in seconds.</p>
+  </div>
+
+  <div class="upload-section">
+    <div class="drop-zone" id="dropZone">
+      <div class="upload-icon">📤</div>
+      <h3>Drop your invoice here</h3>
+      <p>or <span>click to browse</span> your files</p>
+      <div class="file-types">
+        <span class="file-type-badge">JPG</span>
+        <span class="file-type-badge">PNG</span>
+        <span class="file-type-badge">WEBP</span>
+        <span class="file-type-badge">PDF</span>
+        <span class="file-type-badge">TIFF</span>
+        <span class="file-type-badge">BMP</span>
+      </div>
+    </div>
+    <input type="file" id="fileInput" accept=".jpg,.jpeg,.png,.webp,.pdf,.tiff,.bmp">
+
+    <div class="preview-area" id="previewArea">
+      <img id="previewThumb" class="preview-thumb" src="" alt="Preview">
+      <div class="preview-info">
+        <div class="filename" id="previewName"></div>
+        <div class="filesize" id="previewSize"></div>
+      </div>
+    </div>
+
+    <div class="error-box" id="errorBox"></div>
+
+    <button class="btn-extract" id="extractBtn" disabled>
+      <span>✦</span> Extract Invoice Data
+    </button>
+
+    <div class="loading-bar" id="loadingBar">
+      <div class="loading-bar-inner"></div>
+    </div>
+    <div class="loading-text" id="loadingText">Analyzing invoice with AI...</div>
+  </div>
+
+  <div id="results">
+    <div class="divider"></div>
+    <div class="results-header">
+      <div class="results-title">Extracted Data</div>
+      <div id="confidenceBadge" class="confidence-badge"></div>
+    </div>
+
+    <!-- Core fields -->
+    <div class="section-label">Invoice Details</div>
+    <div class="fields-grid" id="coreFields"></div>
+
+    <!-- Vendor -->
+    <div class="section-label">Vendor / Seller</div>
+    <div class="fields-grid" id="vendorFields"></div>
+
+    <!-- Bill To -->
+    <div class="section-label">Bill To</div>
+    <div class="fields-grid" id="billToFields"></div>
+
+    <!-- Line Items -->
+    <div class="section-label">Line Items</div>
+    <div class="table-wrap" id="lineItemsWrap">
+      <table class="line-items-table">
+        <thead>
+          <tr>
+            <th>Description</th>
+            <th>Qty</th>
+            <th>Unit Price</th>
+            <th>Amount</th>
+          </tr>
+        </thead>
+        <tbody id="lineItemsBody"></tbody>
+      </table>
+    </div>
+
+    <!-- Totals -->
+    <div class="section-label">Financials</div>
+    <div class="fields-grid" id="financialFields"></div>
+
+    <!-- Actions -->
+    <div class="result-actions">
+      <button class="btn-action primary" onclick="copyJSON()">📋 Copy JSON</button>
+      <button class="btn-action primary" onclick="downloadJSON()">⬇️ Download JSON</button>
+      <button class="toggle-json-btn" onclick="toggleRaw()">{ } View Raw JSON</button>
+    </div>
+
+    <div class="json-toggle" id="jsonToggle">
+      <pre class="json-pre" id="jsonPre"></pre>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+  const dropZone = document.getElementById('dropZone');
+  const fileInput = document.getElementById('fileInput');
+  const extractBtn = document.getElementById('extractBtn');
+  const previewArea = document.getElementById('previewArea');
+  const previewThumb = document.getElementById('previewThumb');
+  const previewName = document.getElementById('previewName');
+  const previewSize = document.getElementById('previewSize');
+  const errorBox = document.getElementById('errorBox');
+  const loadingBar = document.getElementById('loadingBar');
+  const loadingText = document.getElementById('loadingText');
+  const results = document.getElementById('results');
+
+  let currentFile = null;
+  let currentData = null;
+
+  dropZone.addEventListener('click', () => fileInput.click());
+
+  dropZone.addEventListener('dragover', e => {
+    e.preventDefault();
+    dropZone.classList.add('active');
+  });
+
+  dropZone.addEventListener('dragleave', () => dropZone.classList.remove('active'));
+
+  dropZone.addEventListener('drop', e => {
+    e.preventDefault();
+    dropZone.classList.remove('active');
+    const file = e.dataTransfer.files[0];
+    if (file) setFile(file);
+  });
+
+  fileInput.addEventListener('change', e => {
+    if (e.target.files[0]) setFile(e.target.files[0]);
+  });
+
+  function setFile(file) {
+    currentFile = file;
+    previewName.textContent = file.name;
+    previewSize.textContent = formatSize(file.size);
+
+    if (file.type.startsWith('image/')) {
+      const reader = new FileReader();
+      reader.onload = e => { previewThumb.src = e.target.result; };
+      reader.readAsDataURL(file);
+      previewThumb.style.display = 'block';
+    } else {
+      previewThumb.src = '';
+      previewThumb.style.display = 'none';
+    }
+
+    previewArea.classList.add('show');
+    extractBtn.disabled = false;
+    errorBox.classList.remove('show');
+    results.classList.remove('show');
+  }
+
+  function formatSize(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / 1048576).toFixed(1) + ' MB';
+  }
+
+  extractBtn.addEventListener('click', async () => {
+    if (!currentFile) return;
+
+    setLoading(true);
+    errorBox.classList.remove('show');
+    results.classList.remove('show');
+
+    const formData = new FormData();
+    formData.append('file', currentFile);
+
+    try {
+      const res = await fetch('/upload', { method: 'POST', body: formData });
+      const json = await res.json();
+
+      if (!res.ok || json.error) {
+        showError(json.error || 'Extraction failed');
+      } else {
+        currentData = json.data;
+        renderResults(json.data);
+      }
+    } catch (err) {
+      showError('Network error: ' + err.message);
+    } finally {
+      setLoading(false);
+    }
+  });
+
+  function setLoading(on) {
+    extractBtn.disabled = on;
+    loadingBar.classList.toggle('show', on);
+    loadingText.classList.toggle('show', on);
+    extractBtn.textContent = on ? 'Analyzing...' : '';
+    if (!on) {
+      extractBtn.innerHTML = '<span>✦</span> Extract Invoice Data';
+    }
+  }
+
+  function showError(msg) {
+    errorBox.textContent = '⚠ ' + msg;
+    errorBox.classList.add('show');
+  }
+
+  function val(v) {
+    if (v === null || v === undefined || v === '') return null;
+    return v;
+  }
+
+  function fieldCard(label, value, extra = '') {
+    const isNull = value === null || value === undefined || value === '';
+    return `
+      <div class="field-card ${extra}">
+        <div class="field-label">${label}</div>
+        <div class="field-value ${isNull ? 'null-val' : ''} ${extra.includes('total') ? 'total-val' : ''}">
+          ${isNull ? '— not found' : escapeHtml(String(value))}
+        </div>
+      </div>`;
+  }
+
+  function escapeHtml(s) {
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  function renderResults(d) {
+    // Confidence
+    const badge = document.getElementById('confidenceBadge');
+    const conf = d.confidence || 'medium';
+    badge.textContent = conf.toUpperCase() + ' CONFIDENCE';
+    badge.className = 'confidence-badge confidence-' + conf;
+
+    // Core fields
+    document.getElementById('coreFields').innerHTML = [
+      fieldCard('Invoice Number', val(d.invoice_number)),
+      fieldCard('Invoice Date', val(d.invoice_date)),
+      fieldCard('Due Date', val(d.due_date)),
+      fieldCard('PO Number', val(d.po_number)),
+      fieldCard('Payment Terms', val(d.payment_terms)),
+      fieldCard('Payment Method', val(d.payment_method)),
+    ].join('');
+
+    // Vendor
+    const v = d.vendor || {};
+    document.getElementById('vendorFields').innerHTML = [
+      fieldCard('Company Name', val(v.name)),
+      fieldCard('Address', val(v.address)),
+      fieldCard('Email', val(v.email)),
+      fieldCard('Phone', val(v.phone)),
+      fieldCard('Tax ID / GST', val(v.tax_id)),
+    ].join('');
+
+    // Bill To
+    const b = d.bill_to || {};
+    document.getElementById('billToFields').innerHTML = [
+      fieldCard('Name / Company', val(b.name)),
+      fieldCard('Address', val(b.address)),
+      fieldCard('Email', val(b.email)),
+    ].join('');
+
+    // Line Items
+    const items = Array.isArray(d.line_items) ? d.line_items : [];
+    if (items.length === 0) {
+      document.getElementById('lineItemsWrap').innerHTML = '<div style="padding:20px;color:var(--muted);font-size:14px;text-align:center">No line items found</div>';
+    } else {
+      document.getElementById('lineItemsWrap').innerHTML = `
+        <table class="line-items-table">
+          <thead><tr><th>Description</th><th>Qty</th><th>Unit Price</th><th>Amount</th></tr></thead>
+          <tbody>
+            ${items.map(item => `
+              <tr>
+                <td>${escapeHtml(item.description || '—')}</td>
+                <td>${escapeHtml(item.quantity || '—')}</td>
+                <td>${escapeHtml(item.unit_price || '—')}</td>
+                <td>${escapeHtml(item.amount || '—')}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>`;
+    }
+
+    // Financials
+    document.getElementById('financialFields').innerHTML = [
+      fieldCard('Currency', val(d.currency)),
+      fieldCard('Subtotal', val(d.subtotal)),
+      fieldCard('Tax', val(d.tax)),
+      fieldCard('Discount', val(d.discount)),
+      fieldCard('Shipping', val(d.shipping)),
+      fieldCard('TOTAL AMOUNT', val(d.total), 'total'),
+    ].join('');
+
+    // Raw JSON
+    document.getElementById('jsonPre').textContent = JSON.stringify(d, null, 2);
+
+    results.classList.add('show');
+  }
+
+  function toggleRaw() {
+    const toggle = document.getElementById('jsonToggle');
+    toggle.classList.toggle('show');
+  }
+
+  function copyJSON() {
+    if (!currentData) return;
+    navigator.clipboard.writeText(JSON.stringify(currentData, null, 2));
+    showToast('JSON copied to clipboard!');
+  }
+
+  function downloadJSON() {
+    if (!currentData) return;
+    const blob = new Blob([JSON.stringify(currentData, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'invoice_data.json';
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast('Downloaded invoice_data.json');
+  }
+
+  function showToast(msg) {
+    const toast = document.getElementById('toast');
+    toast.textContent = msg;
+    toast.classList.add('show');
+    setTimeout(() => toast.classList.remove('show'), 2500);
+  }
+</script>
+</body>
+</html>
