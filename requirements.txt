@@ -1,4 +1,5 @@
-streamlit
-pytesseract
-PyPDF2
-Pillow
+flask
+flask-cors
+anthropic
+pillow
+pymupdf
