@@ -12,7 +12,7 @@ import anthropic
 app = Flask(__name__, static_folder=".", static_url_path="")
 CORS(app)
 
-
+client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
 
 def preprocess_image(img: Image.Image) -> Image.Image:
     """Enhance image quality for better OCR accuracy."""
