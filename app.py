@@ -1,139 +1,179 @@
-import streamlit as st
-from PIL import Image
-import pytesseract
+import os
 import re
-import PyPDF2
-import io
+import json
+import base64
+import tempfile
+from pathlib import Path
+from flask import Flask, request, jsonify, send_from_directory
+from flask_cors import CORS
+from PIL import Image, ImageFilter, ImageEnhance
+import anthropic
 
-st.set_page_config(page_title="Invoice OCR Automation", layout="centered")
+app = Flask(__name__, static_folder=".", static_url_path="")
+CORS(app)
 
-st.title("📄 Invoice OCR Automation")
-st.write("Upload an invoice (Image or PDF)")
+client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
 
-uploaded_file = st.file_uploader(
-    "Upload Invoice",
-    type=["jpg", "jpeg", "png", "pdf"]
-)
 
-# ----------------------------------------
-# SMART LINE-BASED EXTRACTION
-# ----------------------------------------
-def extract_fields(text):
+def preprocess_image(img: Image.Image) -> Image.Image:
+    """Enhance image quality for better OCR accuracy."""
+    # Convert to RGB if needed
+    if img.mode not in ("RGB", "L"):
+        img = img.convert("RGB")
 
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    # Upscale small images
+    w, h = img.size
+    if w < 1000 or h < 1000:
+        scale = max(1000 / w, 1000 / h)
+        img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
 
-    data = {
-        "Vendor Name": "Not found",
-        "Invoice Number": "Not found",
-        "Invoice Date": "Not found",
-        "Due Date": "Not found",
-        "Subtotal": "Not found",
-        "Tax": "Not found",
-        "Total Amount": "Not found",
-        "Phone / Account": "Not found"
+    # Sharpen and increase contrast
+    img = img.filter(ImageFilter.SHARPEN)
+    img = ImageEnhance.Contrast(img).enhance(1.4)
+    img = ImageEnhance.Sharpness(img).enhance(1.5)
+    return img
+
+
+def image_to_base64(img: Image.Image) -> tuple[str, str]:
+    """Convert PIL image to base64 string."""
+    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+        img.save(tmp.name, "JPEG", quality=92)
+        tmp_path = tmp.name
+
+    with open(tmp_path, "rb") as f:
+        data = base64.standard_b64encode(f.read()).decode("utf-8")
+
+    os.unlink(tmp_path)
+    return data, "image/jpeg"
+
+
+def extract_invoice_with_ai(img: Image.Image) -> dict:
+    """Use Claude Vision to extract structured invoice fields."""
+    img = preprocess_image(img)
+    img_data, media_type = image_to_base64(img)
+
+    prompt = """You are an expert invoice data extraction system. Analyze this invoice image and extract ALL available fields.
+
+Return ONLY a valid JSON object (no markdown, no explanation) with this structure:
+{
+  "invoice_number": "string or null",
+  "invoice_date": "string or null",
+  "due_date": "string or null",
+  "vendor": {
+    "name": "string or null",
+    "address": "string or null",
+    "email": "string or null",
+    "phone": "string or null",
+    "tax_id": "string or null"
+  },
+  "bill_to": {
+    "name": "string or null",
+    "address": "string or null",
+    "email": "string or null"
+  },
+  "line_items": [
+    {
+      "description": "string",
+      "quantity": "string or null",
+      "unit_price": "string or null",
+      "amount": "string or null"
     }
+  ],
+  "subtotal": "string or null",
+  "tax": "string or null",
+  "discount": "string or null",
+  "shipping": "string or null",
+  "total": "string or null",
+  "currency": "string or null",
+  "payment_terms": "string or null",
+  "payment_method": "string or null",
+  "notes": "string or null",
+  "po_number": "string or null",
+  "confidence": "high|medium|low"
+}
 
-    # ---------------- Vendor Name ----------------
-    for line in lines[:10]:
-        if (
-            len(line) > 5
-            and not re.search(r'invoice|tax|bill|original|date|gst|total', line, re.I)
-            and not re.search(r'\d{4,}', line)
-        ):
-            data["Vendor Name"] = line
-            break
+Rules:
+- Extract EXACTLY what is written on the invoice, do not guess or fabricate
+- For missing fields, use null
+- For currency, detect from symbols ($ = USD, € = EUR, ₹ = INR, £ = GBP, etc.)
+- confidence should reflect overall extraction quality
+- Return ONLY the JSON object, nothing else"""
 
-    # ---------------- Invoice Number ----------------
-    for line in lines:
-        if re.search(r'invoice', line, re.I):
-            match = re.search(r'([A-Z0-9\-\/]{5,})', line)
-            if match and match.group(1).lower() not in ["original"]:
-                data["Invoice Number"] = match.group(1)
-                break
+    response = client.messages.create(
+        model="claude-opus-4-5",
+        max_tokens=2000,
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": media_type,
+                            "data": img_data,
+                        },
+                    },
+                    {"type": "text", "text": prompt},
+                ],
+            }
+        ],
+    )
 
-    # ---------------- Date ----------------
-    for line in lines:
-        date_match = re.search(r'\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}', line)
-        if date_match:
-            data["Invoice Date"] = date_match.group()
-            break
+    raw = response.content[0].text.strip()
+    # Strip markdown fences if present
+    raw = re.sub(r"^```json\s*", "", raw)
+    raw = re.sub(r"\s*```$", "", raw)
 
-        date_match2 = re.search(r'\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}', line)
-        if date_match2:
-            data["Invoice Date"] = date_match2.group()
-            break
-
-    # ---------------- Tax ----------------
-    for line in lines:
-        if re.search(r'gst|tax', line, re.I):
-            match = re.search(r'\d+\.\d{2}', line)
-            if match:
-                data["Tax"] = match.group()
-                break
-
-    # ---------------- Total (VERY IMPORTANT) ----------------
-    for line in lines:
-        if re.search(r'grand total|total amount|amount payable|total$', line, re.I):
-            match = re.search(r'\d+\.\d{2}', line)
-            if match:
-                data["Total Amount"] = match.group()
-                break
-
-    # Fallback → pick largest value
-    if data["Total Amount"] == "Not found":
-        amounts = re.findall(r'\d+\.\d{2}', text)
-        if amounts:
-            values = [float(a) for a in amounts]
-            data["Total Amount"] = str(max(values))
-
-    # ---------------- Phone ----------------
-    for line in lines:
-        phone_match = re.search(r'\b\d{10}\b', line)
-        if phone_match:
-            data["Phone / Account"] = phone_match.group()
-            break
-
-    return data
+    return json.loads(raw)
 
 
-# ----------------------------------------
-# MAIN LOGIC
-# ----------------------------------------
-if uploaded_file:
+@app.route("/")
+def index():
+    return send_from_directory(".", "index.html")
+
+
+@app.route("/upload", methods=["POST"])
+def upload_invoice():
+    if "file" not in request.files:
+        return jsonify({"error": "No file uploaded"}), 400
+
+    file = request.files["file"]
+    if not file.filename:
+        return jsonify({"error": "Empty filename"}), 400
+
+    allowed = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tiff", ".pdf"}
+    ext = Path(file.filename).suffix.lower()
+    if ext not in allowed:
+        return jsonify({"error": f"Unsupported file type: {ext}"}), 400
 
     try:
-        text = ""
-
-        # PDF
-        if uploaded_file.type == "application/pdf":
-            pdf_reader = PyPDF2.PdfReader(io.BytesIO(uploaded_file.read()))
-            for page in pdf_reader.pages:
-                page_text = page.extract_text()
-                if page_text:
-                    text += page_text
-
-        # IMAGE
+        if ext == ".pdf":
+            # For PDFs, convert first page to image
+            try:
+                import fitz  # PyMuPDF
+                with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+                    file.save(tmp.name)
+                    doc = fitz.open(tmp.name)
+                    page = doc[0]
+                    mat = fitz.Matrix(2, 2)
+                    pix = page.get_pixmap(matrix=mat)
+                    img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                    doc.close()
+                    os.unlink(tmp.name)
+            except ImportError:
+                return jsonify({"error": "PDF support requires PyMuPDF. Install with: pip install pymupdf"}), 500
         else:
-            image = Image.open(uploaded_file).convert("RGB")
-            st.image(image, width=450)
-            text = pytesseract.image_to_string(image, config="--psm 6")
+            img = Image.open(file.stream)
 
-        if not text.strip():
-            st.error("❌ No readable text found.")
-            st.stop()
+        result = extract_invoice_with_ai(img)
+        return jsonify({"success": True, "data": result})
 
-        extracted = extract_fields(text)
-
-        st.success("✅ Invoice processed successfully")
-
-        with st.expander("📄 Extracted Details", expanded=True):
-            for k, v in extracted.items():
-                st.write(f"**{k}:** {v}")
-
-            st.markdown("---")
-            st.markdown("🔍 Raw Extracted Text")
-            st.text(text)
-
+    except json.JSONDecodeError as e:
+        return jsonify({"error": f"AI returned invalid JSON: {str(e)}"}), 500
     except Exception as e:
-        st.error("❌ Processing failed")
-        st.code(str(e))
+        return jsonify({"error": str(e)}), 500
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=10000, debug=True)
