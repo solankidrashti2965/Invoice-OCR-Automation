@@ -1,5 +1,5 @@
-flask
-flask-cors
-anthropic
+streamlit
+pytesseract
 pillow
-pymupdf
+pdf2image
+
