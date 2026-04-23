@@ -240,7 +240,7 @@ def extract_fields(text):
 
     # 3. DATE EXTRACTION
     # Handles DD.MM.YYYY, YYYY.MM.DD, DD-MMM-YYYY, DD MMM YYYY etc.
-    date_pattern = r'(?i)(?:Invoice|Order|Bill|Document)?\s*Date\s*[:-]?\s*(\d{1,4}[\.\/-\s]+[A-Za-z0-9]{2,10}[\.\/-\s]+\d{1,4})'
+    date_pattern = r'(?i)(?:Invoice|Order|Bill|Document)?\s*Date\s*[:-]?\s*(\d{1,4}[\.\/\s-]+[A-Za-z0-9]{2,10}[\.\/\s-]+\d{1,4})'
     date_match = re.search(date_pattern, text)
     if date_match:
         raw_date = date_match.group(1).strip()
@@ -264,7 +264,7 @@ def extract_fields(text):
                 except:
                     pass
 
-    due_pattern = r'(?i)(?:Due|Pay By)\s*Date\s*[:-]?\s*(\d{1,4}[\.\/-\s]+[A-Za-z0-9]{2,10}[\.\/-\s]+\d{1,4})'
+    due_pattern = r'(?i)(?:Due|Pay By)\s*Date\s*[:-]?\s*(\d{1,4}[\.\/\s-]+[A-Za-z0-9]{2,10}[\.\/\s-]+\d{1,4})'
     due_date_match = re.search(due_pattern, text)
     if due_date_match:
         raw_due_date = due_date_match.group(1).strip()
