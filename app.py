@@ -239,13 +239,41 @@ def extract_fields(text):
             data["Invoice Number"] = ord_match.group(1).upper()
 
     # 3. DATE EXTRACTION
-    date_match = re.search(r'(?i)(?:Invoice|Order|Bill)\s+Date\s*[:-]?\s*(\d{2}[\.\/-]\d{2}[\.\/-]\d{4})', text)
+    # Handles DD.MM.YYYY, YYYY.MM.DD, DD-MMM-YYYY, DD MMM YYYY etc.
+    date_pattern = r'(?i)(?:Invoice|Order|Bill|Document)?\s*Date\s*[:-]?\s*(\d{1,4}[\.\/-\s]+[A-Za-z0-9]{2,10}[\.\/-\s]+\d{1,4})'
+    date_match = re.search(date_pattern, text)
     if date_match:
-        data["Invoice Date"] = date_match.group(1).replace('.', '-')
+        raw_date = date_match.group(1).strip()
+        try:
+            import dateutil.parser
+            parsed_dt = dateutil.parser.parse(raw_date, fuzzy=True)
+            data["Invoice Date"] = parsed_dt.strftime("%Y-%m-%d")
+        except:
+            data["Invoice Date"] = raw_date
+            
+    # Fallback date extraction using fuzzy approach
+    if data["Invoice Date"] == "Not found":
+        import dateutil.parser
+        for ln in lines:
+            if "date" in ln.lower():
+                try:
+                    dt = dateutil.parser.parse(ln, fuzzy=True)
+                    if 2000 <= dt.year <= 2050:
+                        data["Invoice Date"] = dt.strftime("%Y-%m-%d")
+                        break
+                except:
+                    pass
 
-    due_date_match = re.search(r'(?i)(?:Due)\s+Date\s*[:-]?\s*(\d{2}[\.\/-]\d{2}[\.\/-]\d{4})', text)
+    due_pattern = r'(?i)(?:Due|Pay By)\s*Date\s*[:-]?\s*(\d{1,4}[\.\/-\s]+[A-Za-z0-9]{2,10}[\.\/-\s]+\d{1,4})'
+    due_date_match = re.search(due_pattern, text)
     if due_date_match:
-        data["Due Date"] = due_date_match.group(1).replace('.', '-')
+        raw_due_date = due_date_match.group(1).strip()
+        try:
+            import dateutil.parser
+            parsed_due = dateutil.parser.parse(raw_due_date, fuzzy=True)
+            data["Due Date"] = parsed_due.strftime("%Y-%m-%d")
+        except:
+            data["Due Date"] = raw_due_date
 
     # 4. TOTAL AMOUNT EXTRACTION (Ultra-Robust)
     all_floats = []
@@ -334,7 +362,7 @@ if uploaded_file:
         
         # [SILENT DEBUG LOGGER] Write the raw text for analysis later
         try:
-            with open('ocr_dump_debug.txt', 'w', encoding='utf-8') as f:
+            with open(r'c:\Users\DRASHTI\OneDrive\文档\invoice_ocr_project\ocr_dump_debug.txt', 'w', encoding='utf-8') as f:
                 f.write(extracted_text)
         except:
             pass
