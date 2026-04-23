@@ -193,8 +193,10 @@ def preprocess_image_for_ocr(image_bytes, is_pdf=False, pdf_dpi=300):
 def extract_fields(text):
     data = {
         "Invoice Number": "Not found",
+        "Order ID": "Not found",
         "Vendor Name": "Not found",
         "Invoice Date": "Not found",
+        "Order Date": "Not found",
         "Due Date": "Not found",
         "Total Amount": "Not found"
     }
@@ -228,19 +230,19 @@ def extract_fields(text):
                 break
 
     # 2. INVOICE NUMBER EXTRACTION
-    # Handles "Invoice Number :AMD2-9374" or "Order Number" contexts
+    # Handles "Invoice Number :AMD2-9374"
     inv_match = re.search(r'(?i)Invoice\s+(?:Number|No|Details)\s*[:-]?\s*([A-Za-z0-9\-_]+)', text)
     if inv_match:
         data["Invoice Number"] = inv_match.group(1).upper()
-    else:
-        # Check standard Order Number if Invoice missing
-        ord_match = re.search(r'(?i)Order\s+(?:Number|No)\s*[:-]?\s*([A-Za-z0-9\-_]+)', text)
-        if ord_match:
-            data["Invoice Number"] = ord_match.group(1).upper()
+        
+    # Check standard Order Number
+    ord_match = re.search(r'(?i)Order\s+(?:Number|No|ID)\s*[:-]?\s*([A-Za-z0-9\-_]+)', text)
+    if ord_match:
+        data["Order ID"] = ord_match.group(1).upper()
 
     # 3. DATE EXTRACTION
     # Handles DD.MM.YYYY, YYYY.MM.DD, DD-MMM-YYYY, DD MMM YYYY etc.
-    date_pattern = r'(?i)(?:Invoice|Order|Bill|Document)?\s*Date\s*[:-]?\s*(\d{1,4}[\.\/\s-]+[A-Za-z0-9]{2,10}[\.\/\s-]+\d{1,4})'
+    date_pattern = r'(?i)(?:Invoice|Bill|Document)?\s*Date\s*[:-]?\s*(\d{1,4}[\.\/\s-]+[A-Za-z0-9]{2,10}[\.\/\s-]+\d{1,4})'
     date_match = re.search(date_pattern, text)
     if date_match:
         raw_date = date_match.group(1).strip()
@@ -250,6 +252,18 @@ def extract_fields(text):
             data["Invoice Date"] = parsed_dt.strftime("%Y-%m-%d")
         except:
             data["Invoice Date"] = raw_date
+            
+    # Order Date
+    ord_date_pattern = r'(?i)Order\s*Date\s*[:-]?\s*(\d{1,4}[\.\/\s-]+[A-Za-z0-9]{2,10}[\.\/\s-]+\d{1,4})'
+    ord_date_match = re.search(ord_date_pattern, text)
+    if ord_date_match:
+        raw_ord_date = ord_date_match.group(1).strip()
+        try:
+            import dateutil.parser
+            parsed_ord_dt = dateutil.parser.parse(raw_ord_date, fuzzy=True)
+            data["Order Date"] = parsed_ord_dt.strftime("%Y-%m-%d")
+        except:
+            data["Order Date"] = raw_ord_date
             
     # Fallback date extraction using fuzzy approach
     if data["Invoice Date"] == "Not found":
@@ -286,20 +300,22 @@ def extract_fields(text):
             except: pass
 
     total_val = None
+    all_total_candidates = []
     
     # Heuristic 1: Look explicitly for "Total" / "Amount" rows
     for i, ln in enumerate(lines):
         lower_ln = ln.lower()
-        if "total amount" in lower_ln or "net amount" in lower_ln or "grand total" in lower_ln:
+        if "total amount" in lower_ln or "net amount" in lower_ln or "grand total" in lower_ln or "amount payable" in lower_ln or ln.lower().startswith("total"):
             m = re.findall(r'(\d{1,8}\.\d{2})', ln)
             if m:
-                total_val = max([float(x) for x in m])
-                break
+                all_total_candidates.append(max([float(x) for x in m]))
             elif i + 1 < len(lines): # Check next line if it fell down
                 m2 = re.findall(r'(\d{1,8}\.\d{2})', lines[i+1])
                 if m2:
-                    total_val = max([float(x) for x in m2])
-                    break
+                    all_total_candidates.append(max([float(x) for x in m2]))
+
+    if all_total_candidates:
+        total_val = max(all_total_candidates)
 
     # Heuristic 2: For Amazon/complex tables, scan from the bottom up to find the largest currency-marked float
     if total_val is None:
@@ -362,7 +378,7 @@ if uploaded_file:
         
         # [SILENT DEBUG LOGGER] Write the raw text for analysis later
         try:
-            with open(r'c:\Users\DRASHTI\OneDrive\文档\invoice_ocr_project\ocr_dump_debug.txt', 'w', encoding='utf-8') as f:
+            with open('ocr_dump_debug.txt', 'w', encoding='utf-8') as f:
                 f.write(extracted_text)
         except:
             pass
@@ -392,7 +408,7 @@ if uploaded_file:
         </div>
         """, unsafe_allow_html=True)
         
-        ic1, ic2 = st.columns(2)
+        ic1, ic2, ic3 = st.columns(3)
         with ic1:
             st.markdown(f"""
             <div class="data-card">
@@ -411,6 +427,23 @@ if uploaded_file:
             """, unsafe_allow_html=True)
 
         with ic2:
+            st.markdown(f"""
+            <div class="data-card">
+                <div class="card-icon">🛒</div>
+                <div class="card-label">Order ID</div>
+                <div class="card-value">{extracted_data['Order ID']}</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+            st.markdown(f"""
+            <div class="data-card">
+                <div class="card-icon">🕒</div>
+                <div class="card-label">Order Date</div>
+                <div class="card-value">{extracted_data['Order Date']}</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        with ic3:
             st.markdown(f"""
             <div class="data-card total-card">
                 <div class="card-icon">💰</div>
