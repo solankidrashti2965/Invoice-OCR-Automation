@@ -350,7 +350,19 @@ def extract_fields(text):
     if total_val is not None:
         data["Total Amount"] = f"₹ {total_val:.2f}"
         
-    # CROSS-POPULATION REMOVED - Keep fields as "Not found" if explicitly missing
+    # Zomato Specific Overrides: Zomato prints Order IDs as "Invoice No". The user expects them in Order ID.
+    if data["Invoice Number"].startswith("Z") and "-" in data["Invoice Number"]:
+        data["Order ID"] = data["Invoice Number"]
+        data["Invoice Number"] = "Not found"
+        
+        # Also move the date
+        if data["Invoice Date"] != "Not found" and data["Order Date"] == "Not found":
+            data["Order Date"] = data["Invoice Date"]
+            data["Invoice Date"] = "Not found"
+            
+    # Add debug info for troubleshooting
+    data["_DEBUG_all_floats"] = all_floats
+    data["_DEBUG_candidates"] = all_total_candidates
     
     return data
 
