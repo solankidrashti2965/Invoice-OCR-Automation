@@ -310,17 +310,26 @@ def extract_fields(text):
     for i, ln in enumerate(lines):
         lower_ln = ln.lower()
         if "total" in lower_ln or "amount" in lower_ln or "net" in lower_ln or "pay" in lower_ln:
-            m = re.findall(r'(\d{1,8}(?:\.\d{2})?)', ln)
+            # STRICTLY require either a decimal .XX or a currency prefix for standalone numbers
+            matches = re.findall(r'(?:[%₹\$€£]|Rs\.?\s*|INR\s*)\s*(\d{1,8}(?:\.\d{2})?)', ln, re.IGNORECASE)
+            matches_unprefixed = re.findall(r'\b(\d{1,8}\.\d{2})\b', ln)
+            
+            m = list(set(matches + matches_unprefixed))
             if m:
-                vals = [float(x) for x in m if float(x) < 200000 and ('.' in x or x != '0')]
+                vals = [float(x.replace(',','')) for x in m if float(x.replace(',','')) < 200000]
                 if vals: all_total_candidates.append(max(vals))
             elif i + 1 < len(lines): # Check next line if it fell down
-                m2 = re.findall(r'(\d{1,8}(?:\.\d{2})?)', lines[i+1])
+                nxt_ln = lines[i+1]
+                m2_matches = re.findall(r'(?:[%₹\$€£]|Rs\.?\s*|INR\s*)\s*(\d{1,8}(?:\.\d{2})?)', nxt_ln, re.IGNORECASE)
+                m2_unprefixed = re.findall(r'\b(\d{1,8}\.\d{2})\b', nxt_ln)
+                m2 = list(set(m2_matches + m2_unprefixed))
                 if m2:
-                    vals2 = [float(x) for x in m2 if float(x) < 200000 and ('.' in x or x != '0')]
+                    vals2 = [float(x.replace(',','')) for x in m2 if float(x.replace(',','')) < 200000]
                     if vals2: all_total_candidates.append(max(vals2))
 
     if all_total_candidates:
+        # Zomato invoices can sometimes show multiple totals. We cautiously take the absolute maximum 
+        # monetary formatted value closely associated with a Total keyword.
         total_val = max(all_total_candidates)
 
     # Heuristic 2: For Amazon/complex tables, scan from the bottom up to find the largest currency-marked value
@@ -341,17 +350,8 @@ def extract_fields(text):
     if total_val is not None:
         data["Total Amount"] = f"₹ {total_val:.2f}"
         
-    # CROSS-POPULATION (Aggressive prevention of "Not found")
-    if data["Order ID"] == "Not found" and data["Invoice Number"] != "Not found":
-        data["Order ID"] = data["Invoice Number"]
-    elif data["Invoice Number"] == "Not found" and data["Order ID"] != "Not found":
-        data["Invoice Number"] = data["Order ID"]
-        
-    if data["Order Date"] == "Not found" and data["Invoice Date"] != "Not found":
-        data["Order Date"] = data["Invoice Date"]
-    elif data["Invoice Date"] == "Not found" and data["Order Date"] != "Not found":
-        data["Invoice Date"] = data["Order Date"]
-
+    # CROSS-POPULATION REMOVED - Keep fields as "Not found" if explicitly missing
+    
     return data
 
 
