@@ -306,26 +306,31 @@ def extract_fields(text):
     total_val = None
     all_total_candidates = []
     
-    # Heuristic 1: Look explicitly after "Total" / "Amount" keywords
+    # Heuristic 1: Look for explicit floats (.XX) or currency-labeled integers explicitly on Total lines
     for i, ln in enumerate(lines):
         lower_ln = ln.lower()
-        keywords = ["grand total", "total amount", "net amount", "amount payable", "total paid", "total due", "pay", "total"]
-        if any(kw in lower_ln for kw in keywords):
-            # Find all potential numbers on the line
-            nums = re.findall(r'(\d{1,8}(?:\.\d{1,2})?)', ln)
-            if nums:
-                # The total is almost always the right-most number on the line
-                val = float(nums[-1].replace(',', ''))
-                if 0 < val < 200000 and val not in [2022, 2023, 2024, 2025, 2026]:
-                    all_total_candidates.append(val)
-                    
-            # Next line fallback for vertical layouts
+        if any(kw in lower_ln for kw in ["total", "amount", "pay", "net", "due"]):
+            # Extract Decimals (XX.XX)
+            m_dec = re.findall(r'(\d{1,8}\.\d{1,2})', ln)
+            # Extract Integers specifically prefixed by a currency symbol
+            m_pref = re.findall(r'(?:[%₹\$€£]|rs\.?\s*|inr\s*)\s*(\d{1,8})', lower_ln)
+            
+            for x in m_dec + m_pref:
+                try: 
+                    val = float(x.replace(',',''))
+                    if val < 200000: all_total_candidates.append(val)
+                except: pass
+                
+            # Check the immediate next line in case of vertical tabular layouts
             if i + 1 < len(lines):
-                nums2 = re.findall(r'(\d{1,8}(?:\.\d{1,2})?)', lines[i+1])
-                if nums2:
-                    val2 = float(nums2[-1].replace(',', ''))
-                    if 0 < val2 < 200000 and val2 not in [2022, 2023, 2024, 2025, 2026]:
-                        all_total_candidates.append(val2)
+                nxt = lines[i+1].lower()
+                m2_dec = re.findall(r'(\d{1,8}\.\d{1,2})', nxt)
+                m2_pref = re.findall(r'(?:[%₹\$€£]|rs\.?\s*|inr\s*)\s*(\d{1,8})', nxt)
+                for x in m2_dec + m2_pref:
+                    try:
+                        val = float(x.replace(',',''))
+                        if val < 200000: all_total_candidates.append(val)
+                    except: pass
 
     if all_total_candidates:
         # Zomato invoices can sometimes show multiple totals. We cautiously take the absolute maximum 
