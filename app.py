@@ -309,6 +309,8 @@ def extract_fields(text):
             "hundred":100,"thousand":1000,"lakh":100000,
         }
         s = sentence.lower()
+        # Normalize hyphens in compound numbers: "sixty-four" → "sixty four"
+        s = re.sub(r'(\w)-(\w)', r'\1 \2', s)
         # Split on 'and ... paisa' to separate rupees from paisa
         paisa_val = 0
         paisa_m = re.search(r'and\s+(\w+)\s+paisa', s)
