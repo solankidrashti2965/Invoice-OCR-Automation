@@ -4,18 +4,192 @@ import pytesseract
 import re
 import tempfile
 import os
-from pdf2image import convert_from_bytes
+import sys
 
-st.set_page_config(page_title="Invoice OCR Automation", layout="centered")
+# Optional NLP / fallback libraries
+try:
+    import fitz  # PyMuPDF
+    import dateutil.parser
+    from thefuzz import fuzz
+except ImportError:
+    pass
 
-st.title("📄 Invoice OCR Automation")
-st.write("Upload an invoice (Image or PDF)")
+import cv2
+import numpy as np
+import json
 
-uploaded_file = st.file_uploader(
-    "Upload Invoice",
-    type=["jpg", "jpeg", "png", "pdf"]
+# ==========================================
+# PAGE CONFIGURATION (MUST BE FIRST)
+# ==========================================
+st.set_page_config(
+    page_title="Invoice Insight | AI Data Extraction",
+    page_icon="📄",
+    layout="wide",
 )
 
+# ==========================================
+# CUSTOM CSS FOR PREMIUM UI
+# ==========================================
+st.markdown("""
+<style>
+    /* Google Fonts */
+    @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap');
+    
+    html, body, [class*="setup"] {
+        font-family: 'Outfit', sans-serif;
+    }
+    
+    /* Main Background & Text */
+    .stApp {
+        background: radial-gradient(circle at top, #1e2430 0%, #0d1117 100%);
+        color: #e6edf3;
+    }
+    
+    /* Header Container */
+    .main-header {
+        background: linear-gradient(135deg, #1f6feb 0%, #2ea043 100%);
+        padding: 40px;
+        border-radius: 16px;
+        margin-bottom: 30px;
+        text-align: center;
+        box-shadow: 0 10px 40px rgba(46, 160, 67, 0.2);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        position: relative;
+        overflow: hidden;
+    }
+        
+    .main-header h1 {
+        color: #ffffff;
+        font-weight: 700;
+        margin: 0;
+        font-size: 3rem;
+        letter-spacing: -1px;
+    }
+    
+    .main-header p {
+        color: rgba(255, 255, 255, 0.9);
+        margin-top: 10px;
+        font-size: 1.2rem;
+        font-weight: 300;
+    }
+    
+    /* Extraction Cards (Glassmorphism UI) */
+    .data-card {
+        background: rgba(22, 27, 34, 0.6);
+        backdrop-filter: blur(16px);
+        -webkit-backdrop-filter: blur(16px);
+        border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 16px;
+        padding: 24px;
+        margin-bottom: 20px;
+        transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+        position: relative;
+        overflow: hidden;
+    }
+    
+    .data-card:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 15px 30px rgba(0,0,0,0.4);
+        border-color: rgba(88, 166, 255, 0.5);
+        background: rgba(30, 36, 45, 0.8);
+    }
+    
+    .card-icon {
+        position: absolute;
+        top: 24px;
+        right: 24px;
+        font-size: 28px;
+        opacity: 0.9;
+        filter: drop-shadow(0 4px 6px rgba(0,0,0,0.3));
+    }
+    
+    .card-label {
+        font-size: 0.9rem;
+        text-transform: uppercase;
+        letter-spacing: 1.5px;
+        color: #8b949e;
+        font-weight: 600;
+        margin-bottom: 12px;
+    }
+    
+    .card-value {
+        font-size: 1.6rem;
+        font-weight: 700;
+        color: #ffffff;
+        word-wrap: break-word;
+        line-height: 1.2;
+    }
+    
+    /* Specifically highlight Total Amount */
+    .total-card {
+        background: linear-gradient(135deg, rgba(35, 134, 54, 0.2) 0%, rgba(22, 27, 34, 0.8) 100%);
+        border: 1px solid rgba(46, 160, 67, 0.3);
+    }
+    .total-card .card-value {
+        color: #3fb950;
+        font-size: 2.2rem;
+    }
+    .total-card:hover {
+        border-color: #2ea043;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# ==========================================
+# OCR & PREPROCESSING LOGIC
+# ==========================================
+
+from pathlib import Path
+tess_path = Path(r"C:\Program Files\Tesseract-OCR\tesseract.exe")
+if tess_path.exists():
+    pytesseract.pytesseract.tesseract_cmd = str(tess_path)
+
+@st.cache_data
+def preprocess_image_for_ocr(image_bytes, is_pdf=False, pdf_dpi=300):
+    text = ""
+    images_pil = []
+    
+    try:
+        if is_pdf:
+            doc = fitz.open("pdf", image_bytes)
+            import io
+            for page in doc:
+                pix = page.get_pixmap(dpi=pdf_dpi)
+                img_data = pix.tobytes("png")
+                pil_img = Image.open(io.BytesIO(img_data)).convert("RGB")
+                images_pil.append(pil_img)
+        else:
+            import io
+            images_pil = [Image.open(io.BytesIO(image_bytes)).convert("RGB")]
+            
+        for idx, pil_img in enumerate(images_pil):
+            cv_img = np.array(pil_img)
+            gray = cv2.cvtColor(cv_img, cv2.COLOR_RGB2GRAY)
+            
+            h, w = gray.shape
+            if max(h, w) < 2000:
+                scale_factor = 2
+                gray = cv2.resize(gray, (w * scale_factor, h * scale_factor), interpolation=cv2.INTER_CUBIC)
+            
+            gray_blur = cv2.medianBlur(gray, 3)
+            thresh = cv2.adaptiveThreshold(
+                gray_blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                cv2.THRESH_BINARY, 31, 2
+            )
+            
+            processed_pil = Image.fromarray(thresh)
+            page_text = pytesseract.image_to_string(processed_pil, config="--oem 3 --psm 6")
+            text += page_text + "\n\n"
+            
+        return text, images_pil[0] if len(images_pil) > 0 else None
+        
+    except Exception as e:
+        print("Preprocessing Error:", e)
+        return "", None
+
+# ==========================================
+# ROBUST HYBRID EXTRACTION ENGINE
+# ==========================================
 def extract_fields(text):
     data = {
         "Invoice Number": "Not found",
@@ -24,63 +198,215 @@ def extract_fields(text):
         "Due Date": "Not found",
         "Total Amount": "Not found"
     }
+    
+    if not text.strip():
+        return data
 
-    # Invoice Number
-    m = re.search(r'(Invoice\s*(No|#)?\s*[:\-]?\s*)([A-Z0-9\-]+)', text, re.I)
-    if m:
-        data["Invoice Number"] = m.group(3)
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    full_text = " ".join(lines)
 
-    # Vendor (top lines)
-    lines = text.splitlines()
-    for ln in lines[:6]:
-        if len(ln.strip()) > 4 and not re.search(r'invoice|date|bill|total', ln, re.I):
-            data["Vendor Name"] = ln.strip()
-            break
+    # 1. VENDOR NAME EXTRACTION
+    vendor_found = False
+    for i, ln in enumerate(lines):
+        # Look for Amazon/Zomato specific markers like "Sold By:"
+        if "Sold By:" in ln or "Sold by:" in ln:
+            if i + 1 < len(lines):
+                v_line = lines[i+1]
+                # Vendors are often separated by large whitespace from user address on same line
+                parts = re.split(r'\s{2,}', v_line)
+                data["Vendor Name"] = parts[0].strip()
+                vendor_found = True
+                break
 
-    # Invoice Date
-    m = re.search(r'Invoice\s*Date\s*[:\-]?\s*([0-9\/\-]+)', text, re.I)
-    if m:
-        data["Invoice Date"] = m.group(1)
+    if not vendor_found:
+        # Fallback: Find the first clean ALL CAPS line that isn't a standard document string
+        for ln in lines[:10]:
+            clean_ln = re.sub(r'^[^\w]+', '', ln).strip()
+            if len(clean_ln) > 4 and clean_ln.isupper() and "INVOICE" not in clean_ln and "ORIGINAL" not in clean_ln:
+                data["Vendor Name"] = clean_ln
+                vendor_found = True
+                break
 
-    # Due Date
-    m = re.search(r'Due\s*Date\s*[:\-]?\s*([0-9\/\-]+)', text, re.I)
-    if m:
-        data["Due Date"] = m.group(1)
+    # 2. INVOICE NUMBER EXTRACTION
+    # Handles "Invoice Number :AMD2-9374" or "Order Number" contexts
+    inv_match = re.search(r'(?i)Invoice\s+(?:Number|No|Details)\s*[:-]?\s*([A-Za-z0-9\-_]+)', text)
+    if inv_match:
+        data["Invoice Number"] = inv_match.group(1).upper()
+    else:
+        # Check standard Order Number if Invoice missing
+        ord_match = re.search(r'(?i)Order\s+(?:Number|No)\s*[:-]?\s*([A-Za-z0-9\-_]+)', text)
+        if ord_match:
+            data["Invoice Number"] = ord_match.group(1).upper()
 
-    # Total Amount (last total)
-    totals = re.findall(r'Total\s*\$?\s*([0-9,.]+)', text, re.I)
-    if totals:
-        data["Total Amount"] = totals[-1]
+    # 3. DATE EXTRACTION
+    date_match = re.search(r'(?i)(?:Invoice|Order|Bill)\s+Date\s*[:-]?\s*(\d{2}[\.\/-]\d{2}[\.\/-]\d{4})', text)
+    if date_match:
+        data["Invoice Date"] = date_match.group(1).replace('.', '-')
+
+    due_date_match = re.search(r'(?i)(?:Due)\s+Date\s*[:-]?\s*(\d{2}[\.\/-]\d{2}[\.\/-]\d{4})', text)
+    if due_date_match:
+        data["Due Date"] = due_date_match.group(1).replace('.', '-')
+
+    # 4. TOTAL AMOUNT EXTRACTION (Ultra-Robust)
+    all_floats = []
+    # Collect all valid values matching money format. Tesseract often reads ₹ as %
+    for ln in lines:
+        matches = re.findall(r'(?:[%₹\$€£]|Rs\.?|INR)?\s*(\d{1,8}\.\d{2})', ln, re.IGNORECASE)
+        for m in matches:
+            try:
+                all_floats.append(float(m.replace(',','')))
+            except: pass
+
+    total_val = None
+    
+    # Heuristic 1: Look explicitly for "Total" / "Amount" rows
+    for i, ln in enumerate(lines):
+        lower_ln = ln.lower()
+        if "total amount" in lower_ln or "net amount" in lower_ln or "grand total" in lower_ln:
+            m = re.findall(r'(\d{1,8}\.\d{2})', ln)
+            if m:
+                total_val = max([float(x) for x in m])
+                break
+            elif i + 1 < len(lines): # Check next line if it fell down
+                m2 = re.findall(r'(\d{1,8}\.\d{2})', lines[i+1])
+                if m2:
+                    total_val = max([float(x) for x in m2])
+                    break
+
+    # Heuristic 2: For Amazon/complex tables, scan from the bottom up to find the largest currency-marked float
+    if total_val is None:
+        for ln in reversed(lines):
+            # Check lines that seem to be summary rows (taxes, shipping, totals)
+            if '|' in ln or "CGST" in ln or "SGST" in ln or "%" in ln:
+                m = re.findall(r'(?:[%₹\$€£])\s*(\d{1,8}\.\d{2})', ln)
+                if m:
+                    cand = max([float(x) for x in m])
+                    if cand > 0:
+                        total_val = cand
+                        break
+                        
+    # Fallback to the absolute max value overall (risky, but better than nothing)
+    if total_val is None and all_floats:
+        # Attempt to contextualize with 'Amount in Words' if it exists to avoid taking a wrong number
+        words_found = False
+        for i, ln in enumerate(lines):
+            if "amount in words" in ln.lower() and i+1 < len(lines):
+                if len(lines[i+1]) > 5:
+                    words_found = True
+                    break
+        
+        if not words_found:
+            # Drop the absolute max if it feels too large compared to median, otherwise accept
+            total_val = max(all_floats)
+        else:
+            total_val = max(all_floats) # we still take max for now
+
+    if total_val is not None:
+        data["Total Amount"] = f"₹ {total_val:.2f}"
 
     return data
 
 
+# ==========================================
+# UI RENDERING
+# ==========================================
+st.markdown("""
+<div class="main-header">
+    <h1>📄 Invoice Insight UI Edge</h1>
+    <p>AI-Powered Precision OCR & Data Extraction</p>
+</div>
+""", unsafe_allow_html=True)
+
+uploaded_file = st.file_uploader(
+    "Upload highly-legible invoice or receipt scans",
+    type=["jpg", "jpeg", "png", "webp", "pdf"]
+)
+
 if uploaded_file:
-    st.success("File uploaded successfully ✅")
-
-    text = ""
-
-    try:
-        # ---------- HANDLE PDF ----------
-        if uploaded_file.type == "application/pdf":
-            images = convert_from_bytes(uploaded_file.read())
-            for img in images:
-                text += pytesseract.image_to_string(img)
-
-        # ---------- HANDLE IMAGE ----------
+    file_bytes = uploaded_file.read()
+    file_extension = uploaded_file.name.split('.')[-1].lower()
+    is_pdf = file_extension == "pdf"
+    
+    col1, col2 = st.columns([1, 1.2], gap="large")
+    
+    with st.spinner("Analyzing document structure..."):
+        extracted_text, preview_image = preprocess_image_for_ocr(file_bytes, is_pdf=is_pdf)
+        
+        # [SILENT DEBUG LOGGER] Write the raw text for analysis later
+        try:
+            with open('ocr_dump_debug.txt', 'w', encoding='utf-8') as f:
+                f.write(extracted_text)
+        except:
+            pass
+            
+        if not extracted_text or len(extracted_text.strip()) < 10:
+             st.error("❌ Content Extraction Failed: The uploaded document appears to be empty or unreadable.")
+             st.stop()
+             
+        extracted_data = extract_fields(extracted_text)
+        
+    with col1:
+        st.markdown("<h3 style='color: #8b949e; font-size: 1.1rem; margin-bottom: 20px; letter-spacing: 1px;'>DOCUMENT PREVIEW</h3>", unsafe_allow_html=True)
+        if preview_image:
+             st.image(preview_image, use_container_width=True, caption=uploaded_file.name)
         else:
-            image = Image.open(uploaded_file)
-            st.image(image, width=400)
-            text = pytesseract.image_to_string(image)
+             st.info("Preview not available for this format.")
 
-        if len(text.strip()) < 30:
-            st.error("❌ This does not look like an invoice")
-        else:
-            extracted = extract_fields(text)
+    with col2:
+        st.markdown("<h3 style='color: #8b949e; font-size: 1.1rem; margin-bottom: 20px; letter-spacing: 1px;'>EXTRACTED INTELLIGENCE</h3>", unsafe_allow_html=True)
+        
+        # Vendor Card
+        st.markdown(f"""
+        <div class="data-card">
+            <div class="card-icon">🏢</div>
+            <div class="card-label">Vendor Identity</div>
+            <div class="card-value">{extracted_data['Vendor Name']}</div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        ic1, ic2 = st.columns(2)
+        with ic1:
+            st.markdown(f"""
+            <div class="data-card">
+                <div class="card-icon">#️⃣</div>
+                <div class="card-label">Invoice Number</div>
+                <div class="card-value">{extracted_data['Invoice Number']}</div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            st.markdown(f"""
+            <div class="data-card">
+                <div class="card-icon">📅</div>
+                <div class="card-label">Invoice Date</div>
+                <div class="card-value">{extracted_data['Invoice Date']}</div>
+            </div>
+            """, unsafe_allow_html=True)
 
-            st.subheader("📑 Extracted Details")
-            for k, v in extracted.items():
-                st.write(f"**{k}:** {v}")
+        with ic2:
+            st.markdown(f"""
+            <div class="data-card total-card">
+                <div class="card-icon">💰</div>
+                <div class="card-label">Total Amount Due</div>
+                <div class="card-value">{extracted_data['Total Amount']}</div>
+            </div>
+            """, unsafe_allow_html=True)
 
-    except Exception as e:
-        st.error("Something went wrong while processing the invoice")
+            st.markdown(f"""
+            <div class="data-card">
+                <div class="card-icon">⏳</div>
+                <div class="card-label">Due Date</div>
+                <div class="card-value">{extracted_data['Due Date']}</div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+        st.markdown("<br/>", unsafe_allow_html=True)
+        with st.expander("Show Raw OCR Output & Download JSON"):
+            st.text_area("Processed Text", extracted_text, height=200)
+            
+            json_output = json.dumps(extracted_data, indent=4)
+            st.download_button(
+                label="📥 Download JSON Result",
+                data=json_output,
+                file_name=f"extraction_{extracted_data.get('Invoice Number', 'Unknown')}.json",
+                mime="application/json",
+            )
