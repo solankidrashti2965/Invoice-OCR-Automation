@@ -310,25 +310,22 @@ def extract_fields(text):
     for i, ln in enumerate(lines):
         lower_ln = ln.lower()
         keywords = ["grand total", "total amount", "net amount", "amount payable", "total paid", "total due", "pay", "total"]
-        for kw in keywords:
-            if kw in lower_ln:
-                # Get the text after the keyword
-                after_kw = lower_ln.split(kw, 1)[-1]
-                # Check current line trailing text
-                m = re.search(r'[^0-9]*(\d{1,8}(?:\.\d{1,2})?)', after_kw)
-                if m:
-                    val = float(m.group(1))
-                    if 0 < val < 200000 and val not in [2022, 2023, 2024, 2025, 2026]:
-                        all_total_candidates.append(val)
-                
-                # Also check the following line in case of vertical layout
-                if i + 1 < len(lines):
-                    m2 = re.search(r'^[^0-9]*(\d{1,8}(?:\.\d{1,2})?)', lines[i+1].lower())
-                    if m2:
-                        val2 = float(m2.group(1))
-                        if 0 < val2 < 200000 and val2 not in [2022, 2023, 2024, 2025, 2026]:
-                            all_total_candidates.append(val2)
-                break
+        if any(kw in lower_ln for kw in keywords):
+            # Find all potential numbers on the line
+            nums = re.findall(r'(\d{1,8}(?:\.\d{1,2})?)', ln)
+            if nums:
+                # The total is almost always the right-most number on the line
+                val = float(nums[-1].replace(',', ''))
+                if 0 < val < 200000 and val not in [2022, 2023, 2024, 2025, 2026]:
+                    all_total_candidates.append(val)
+                    
+            # Next line fallback for vertical layouts
+            if i + 1 < len(lines):
+                nums2 = re.findall(r'(\d{1,8}(?:\.\d{1,2})?)', lines[i+1])
+                if nums2:
+                    val2 = float(nums2[-1].replace(',', ''))
+                    if 0 < val2 < 200000 and val2 not in [2022, 2023, 2024, 2025, 2026]:
+                        all_total_candidates.append(val2)
 
     if all_total_candidates:
         # Zomato invoices can sometimes show multiple totals. We cautiously take the absolute maximum 
@@ -353,16 +350,17 @@ def extract_fields(text):
     if total_val is not None:
         data["Total Amount"] = f"₹ {total_val:.2f}"
         
-    # Zomato Specific Overrides: Zomato prints Order IDs as "Invoice No". The user expects them in Order ID.
-    if data["Invoice Number"].startswith("Z") and "-" in data["Invoice Number"]:
+    # CROSS-POPULATION: Ensure no empty cards if data exists under alternate labels
+    if data["Order ID"] == "Not found" and data["Invoice Number"] != "Not found":
         data["Order ID"] = data["Invoice Number"]
-        data["Invoice Number"] = "Not found"
+    elif data["Invoice Number"] == "Not found" and data["Order ID"] != "Not found":
+        data["Invoice Number"] = data["Order ID"]
         
-        # Also move the date
-        if data["Invoice Date"] != "Not found" and data["Order Date"] == "Not found":
-            data["Order Date"] = data["Invoice Date"]
-            data["Invoice Date"] = "Not found"
-            
+    if data["Order Date"] == "Not found" and data["Invoice Date"] != "Not found":
+        data["Order Date"] = data["Invoice Date"]
+    elif data["Invoice Date"] == "Not found" and data["Order Date"] != "Not found":
+        data["Invoice Date"] = data["Order Date"]
+        
     # Add debug info for troubleshooting
     data["_DEBUG_all_floats"] = all_floats
     data["_DEBUG_candidates"] = all_total_candidates
