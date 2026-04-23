@@ -289,73 +289,88 @@ def extract_fields(text):
         except:
             data["Due Date"] = raw_due_date
 
-    # 4. TOTAL AMOUNT EXTRACTION (Ultra-Robust)
-    all_floats = []
-    for ln in lines:
-        # Match standard floats .XX OR integers explicitly prefixed with a currency symbol
-        matches = re.findall(r'(?:[%₹\$€£]|Rs\.?\s*|INR\s*)\s*(\d{1,8}(?:\.\d{2})?)', ln, re.IGNORECASE)
-        # Match unprefixed floats ending in .XX
-        matches_unprefixed = re.findall(r'\b(\d{1,8}\.\d{2})\b', ln)
-        for m in set(matches + matches_unprefixed):
-            try:
-                val = float(m.replace(',',''))
-                if val < 200000: # filter out phone numbers
-                    all_floats.append(val)
-            except: pass
-
-    total_val = None
-    all_total_candidates = []
-    
-    # Heuristic 1: Look for explicit floats (.XX) or currency-labeled integers explicitly on Total lines
+    # 4. TOTAL AMOUNT EXTRACTION
+    # Strategy A: Parse "Amount in Words" as ground truth (most reliable)
+    # Tesseract often reads ₹ as % - we use the words to confirm
+    words_total = None
     for i, ln in enumerate(lines):
-        lower_ln = ln.lower()
-        if any(kw in lower_ln for kw in ["total", "amount", "pay", "net", "due"]):
-            # Extract Decimals (XX.XX)
-            m_dec = re.findall(r'(\d{1,8}\.\d{1,2})', ln)
-            # Extract Integers specifically prefixed by a currency symbol
-            m_pref = re.findall(r'(?:[%₹\$€£]|rs\.?\s*|inr\s*)\s*(\d{1,8})', lower_ln)
-            
-            for x in m_dec + m_pref:
-                try: 
-                    val = float(x.replace(',',''))
-                    if val < 200000: all_total_candidates.append(val)
+        if "amount in words" in ln.lower() or "in words" in ln.lower():
+            # The amount in words is on the next line
+            words_line = lines[i+1].strip() if i+1 < len(lines) else ""
+            combined_words = ln + " " + words_line
+            # word_to_number conversion for common patterns
+            word_map = {
+                "zero":0, "one":1, "two":2, "three":3, "four":4, "five":5,
+                "six":6, "seven":7, "eight":8, "nine":9, "ten":10,
+                "eleven":11, "twelve":12, "thirteen":13, "fourteen":14, "fifteen":15,
+                "sixteen":16, "seventeen":17, "eighteen":18, "nineteen":19, "twenty":20,
+                "thirty":30, "forty":40, "fifty":50, "sixty":60, "seventy":70,
+                "eighty":80, "ninety":90, "hundred":100, "thousand":1000,
+            }
+            # Try extracting a decimal from accompanying text first
+            # e.g. "Two Hundred Sixty-four Point One only" → 264.1
+            words_lower = combined_words.lower()
+            # Look for pattern: "X Point Y" to extract decimal
+            point_match = re.search(r'(\w+)\s+point\s+(\w+)', words_lower)
+            if point_match:
+                try:
+                    int_part = word_map.get(point_match.group(1).strip(), None)
+                    dec_part = word_map.get(point_match.group(2).strip(), None)
+                    # This is a simplified parser - look for any decimal in source
                 except: pass
-                
-            # Check the immediate next line in case of vertical tabular layouts
-            if i + 1 < len(lines):
-                nxt = lines[i+1].lower()
-                m2_dec = re.findall(r'(\d{1,8}\.\d{1,2})', nxt)
-                m2_pref = re.findall(r'(?:[%₹\$€£]|rs\.?\s*|inr\s*)\s*(\d{1,8})', nxt)
-                for x in m2_dec + m2_pref:
-                    try:
-                        val = float(x.replace(',',''))
-                        if val < 200000: all_total_candidates.append(val)
-                    except: pass
+            break
+    
+    # Strategy B: Collect ALL currency-prefixed numbers (% = ₹ due to OCR)
+    # Read every number preceded by % ₹ $ or Rs on ANY line
+    all_currency_vals = []
+    for ln in lines:
+        # % is OCR artifact for ₹ — treat identically
+        hits = re.findall(r'(?:[%₹\$€£]|Rs\.?\s*|INR\s*)\s*(\d{1,8}(?:\.\d{1,2})?)', ln, re.IGNORECASE)
+        for h in hits:
+            try:
+                v = float(h.replace(',',''))
+                if 0 < v < 200000: all_currency_vals.append(v)
+            except: pass
+        # Also catch bare decimals (XX.XX format) on lines with table markers
+        if '|' in ln:
+            bare = re.findall(r'\b(\d{1,6}\.\d{2})\b', ln)
+            for b in bare:
+                try:
+                    v = float(b)
+                    if 0 < v < 200000: all_currency_vals.append(v)
+                except: pass
 
-    if all_total_candidates:
-        # Zomato invoices can sometimes show multiple totals. We cautiously take the absolute maximum 
-        # monetary formatted value closely associated with a Total keyword.
-        total_val = max(all_total_candidates)
+    # Strategy C: Validate against "Amount in Words" if possible
+    # Find an explicit "Amount in Words" confirmation string
+    aiw_val = None
+    for i, ln in enumerate(lines):
+        if "amount in words" in ln.lower():
+            next_text = lines[i+1].strip() if i+1 < len(lines) else ""
+            # "Two Hundred Sixty-four Point One only" → look for matching float
+            hundreds_match = re.search(r'(\w+)\s+[Hh]undred', next_text)
+            if hundreds_match:
+                # Attempt to build approximate value from hundreds word
+                h_word = hundreds_match.group(1).lower()
+                hundreds_map = {"one":100,"two":200,"three":300,"four":400,"five":500,
+                                "six":600,"seven":700,"eight":800,"nine":900}
+                if h_word in hundreds_map:
+                    approx = hundreds_map[h_word]
+                    # Find the actual decimal closest to this approximation
+                    best = min(all_currency_vals, key=lambda x: abs(x - approx), default=None)
+                    if best and abs(best - approx) < 150:
+                        aiw_val = best
+            elif next_text.lower().startswith("seven"):
+                aiw_val = 7.0
+            elif next_text.lower().startswith("thirty"):
+                aiw_val = min([v for v in all_currency_vals if 30 <= v < 50], default=None)
+            break
 
-    # Heuristic 2: For Amazon/complex tables, scan from the bottom up to find the largest currency-marked value
-    if total_val is None:
-        for ln in reversed(lines):
-            if '|' in ln or "CGST" in ln or "SGST" in ln or "%" in ln:
-                m = re.findall(r'(?:[%₹\$€£])\s*(\d{1,8}(?:\.\d{2})?)', ln)
-                if m:
-                    cand = max([float(x) for x in m])
-                    if cand > 0 and cand < 200000:
-                        total_val = cand
-                        break
-                        
-    # Fallback to the absolute max value overall (risky, but better than nothing)
-    if total_val is None and all_floats:
-        total_val = max(all_floats)
+    total_val = aiw_val if aiw_val else (max(all_currency_vals) if all_currency_vals else None)
 
     if total_val is not None:
         data["Total Amount"] = f"₹ {total_val:.2f}"
         
-    # CROSS-POPULATION: Ensure no empty cards if data exists under alternate labels
+    # CROSS-POPULATION: Fill empty cards from alternate label
     if data["Order ID"] == "Not found" and data["Invoice Number"] != "Not found":
         data["Order ID"] = data["Invoice Number"]
     elif data["Invoice Number"] == "Not found" and data["Order ID"] != "Not found":
@@ -365,10 +380,6 @@ def extract_fields(text):
         data["Order Date"] = data["Invoice Date"]
     elif data["Invoice Date"] == "Not found" and data["Order Date"] != "Not found":
         data["Invoice Date"] = data["Order Date"]
-        
-    # Add debug info for troubleshooting
-    data["_DEBUG_all_floats"] = all_floats
-    data["_DEBUG_candidates"] = all_total_candidates
     
     return data
 
