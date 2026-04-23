@@ -306,26 +306,29 @@ def extract_fields(text):
     total_val = None
     all_total_candidates = []
     
-    # Heuristic 1: Look explicitly for "Total" / "Amount" rows
+    # Heuristic 1: Look explicitly after "Total" / "Amount" keywords
     for i, ln in enumerate(lines):
         lower_ln = ln.lower()
-        if "total" in lower_ln or "amount" in lower_ln or "net" in lower_ln or "pay" in lower_ln:
-            # STRICTLY require either a decimal .XX or a currency prefix for standalone numbers
-            matches = re.findall(r'(?:[%₹\$€£]|Rs\.?\s*|INR\s*)\s*(\d{1,8}(?:\.\d{2})?)', ln, re.IGNORECASE)
-            matches_unprefixed = re.findall(r'\b(\d{1,8}\.\d{2})\b', ln)
-            
-            m = list(set(matches + matches_unprefixed))
-            if m:
-                vals = [float(x.replace(',','')) for x in m if float(x.replace(',','')) < 200000]
-                if vals: all_total_candidates.append(max(vals))
-            elif i + 1 < len(lines): # Check next line if it fell down
-                nxt_ln = lines[i+1]
-                m2_matches = re.findall(r'(?:[%₹\$€£]|Rs\.?\s*|INR\s*)\s*(\d{1,8}(?:\.\d{2})?)', nxt_ln, re.IGNORECASE)
-                m2_unprefixed = re.findall(r'\b(\d{1,8}\.\d{2})\b', nxt_ln)
-                m2 = list(set(m2_matches + m2_unprefixed))
-                if m2:
-                    vals2 = [float(x.replace(',','')) for x in m2 if float(x.replace(',','')) < 200000]
-                    if vals2: all_total_candidates.append(max(vals2))
+        keywords = ["grand total", "total amount", "net amount", "amount payable", "total paid", "total due", "pay", "total"]
+        for kw in keywords:
+            if kw in lower_ln and "tax" not in lower_ln and "saving" not in lower_ln:
+                # Get the text after the keyword
+                after_kw = lower_ln.split(kw, 1)[-1]
+                # Check current line trailing text
+                m = re.search(r'[^0-9]*(\d{1,8}(?:\.\d{1,2})?)', after_kw)
+                if m:
+                    val = float(m.group(1))
+                    if 0 < val < 200000 and val not in [2022, 2023, 2024, 2025, 2026]:
+                        all_total_candidates.append(val)
+                
+                # Also check the following line in case of vertical layout
+                if i + 1 < len(lines):
+                    m2 = re.search(r'^[^0-9]*(\d{1,8}(?:\.\d{1,2})?)', lines[i+1].lower())
+                    if m2:
+                        val2 = float(m2.group(1))
+                        if 0 < val2 < 200000 and val2 not in [2022, 2023, 2024, 2025, 2026]:
+                            all_total_candidates.append(val2)
+                break
 
     if all_total_candidates:
         # Zomato invoices can sometimes show multiple totals. We cautiously take the absolute maximum 
