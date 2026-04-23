@@ -291,12 +291,16 @@ def extract_fields(text):
 
     # 4. TOTAL AMOUNT EXTRACTION (Ultra-Robust)
     all_floats = []
-    # Collect all valid values matching money format. Tesseract often reads ₹ as %
     for ln in lines:
-        matches = re.findall(r'(?:[%₹\$€£]|Rs\.?|INR)?\s*(\d{1,8}\.\d{2})', ln, re.IGNORECASE)
-        for m in matches:
+        # Match standard floats .XX OR integers explicitly prefixed with a currency symbol
+        matches = re.findall(r'(?:[%₹\$€£]|Rs\.?\s*|INR\s*)\s*(\d{1,8}(?:\.\d{2})?)', ln, re.IGNORECASE)
+        # Match unprefixed floats ending in .XX
+        matches_unprefixed = re.findall(r'\b(\d{1,8}\.\d{2})\b', ln)
+        for m in set(matches + matches_unprefixed):
             try:
-                all_floats.append(float(m.replace(',','')))
+                val = float(m.replace(',',''))
+                if val < 200000: # filter out phone numbers
+                    all_floats.append(val)
             except: pass
 
     total_val = None
@@ -305,48 +309,48 @@ def extract_fields(text):
     # Heuristic 1: Look explicitly for "Total" / "Amount" rows
     for i, ln in enumerate(lines):
         lower_ln = ln.lower()
-        if "total amount" in lower_ln or "net amount" in lower_ln or "grand total" in lower_ln or "amount payable" in lower_ln or ln.lower().startswith("total"):
-            m = re.findall(r'(\d{1,8}\.\d{2})', ln)
+        if "total" in lower_ln or "amount" in lower_ln or "net" in lower_ln or "pay" in lower_ln:
+            m = re.findall(r'(\d{1,8}(?:\.\d{2})?)', ln)
             if m:
-                all_total_candidates.append(max([float(x) for x in m]))
+                vals = [float(x) for x in m if float(x) < 200000 and ('.' in x or x != '0')]
+                if vals: all_total_candidates.append(max(vals))
             elif i + 1 < len(lines): # Check next line if it fell down
-                m2 = re.findall(r'(\d{1,8}\.\d{2})', lines[i+1])
+                m2 = re.findall(r'(\d{1,8}(?:\.\d{2})?)', lines[i+1])
                 if m2:
-                    all_total_candidates.append(max([float(x) for x in m2]))
+                    vals2 = [float(x) for x in m2 if float(x) < 200000 and ('.' in x or x != '0')]
+                    if vals2: all_total_candidates.append(max(vals2))
 
     if all_total_candidates:
         total_val = max(all_total_candidates)
 
-    # Heuristic 2: For Amazon/complex tables, scan from the bottom up to find the largest currency-marked float
+    # Heuristic 2: For Amazon/complex tables, scan from the bottom up to find the largest currency-marked value
     if total_val is None:
         for ln in reversed(lines):
-            # Check lines that seem to be summary rows (taxes, shipping, totals)
             if '|' in ln or "CGST" in ln or "SGST" in ln or "%" in ln:
-                m = re.findall(r'(?:[%₹\$€£])\s*(\d{1,8}\.\d{2})', ln)
+                m = re.findall(r'(?:[%₹\$€£])\s*(\d{1,8}(?:\.\d{2})?)', ln)
                 if m:
                     cand = max([float(x) for x in m])
-                    if cand > 0:
+                    if cand > 0 and cand < 200000:
                         total_val = cand
                         break
                         
     # Fallback to the absolute max value overall (risky, but better than nothing)
     if total_val is None and all_floats:
-        # Attempt to contextualize with 'Amount in Words' if it exists to avoid taking a wrong number
-        words_found = False
-        for i, ln in enumerate(lines):
-            if "amount in words" in ln.lower() and i+1 < len(lines):
-                if len(lines[i+1]) > 5:
-                    words_found = True
-                    break
-        
-        if not words_found:
-            # Drop the absolute max if it feels too large compared to median, otherwise accept
-            total_val = max(all_floats)
-        else:
-            total_val = max(all_floats) # we still take max for now
+        total_val = max(all_floats)
 
     if total_val is not None:
         data["Total Amount"] = f"₹ {total_val:.2f}"
+        
+    # CROSS-POPULATION (Aggressive prevention of "Not found")
+    if data["Order ID"] == "Not found" and data["Invoice Number"] != "Not found":
+        data["Order ID"] = data["Invoice Number"]
+    elif data["Invoice Number"] == "Not found" and data["Order ID"] != "Not found":
+        data["Invoice Number"] = data["Order ID"]
+        
+    if data["Order Date"] == "Not found" and data["Invoice Date"] != "Not found":
+        data["Order Date"] = data["Invoice Date"]
+    elif data["Invoice Date"] == "Not found" and data["Order Date"] != "Not found":
+        data["Invoice Date"] = data["Order Date"]
 
     return data
 
