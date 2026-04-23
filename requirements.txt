@@ -1,5 +1,8 @@
 streamlit
 pytesseract
 pillow
-pdf2image
-
+pymupdf
+opencv-python-headless
+numpy
+thefuzz
+python-dateutil
