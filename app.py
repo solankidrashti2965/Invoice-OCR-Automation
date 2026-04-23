@@ -235,8 +235,8 @@ def extract_fields(text):
     if inv_match:
         data["Invoice Number"] = inv_match.group(1).upper()
         
-    # Check standard Order Number
-    ord_match = re.search(r'(?i)Order\s+(?:Number|No|ID)\s*[:-]?\s*([A-Za-z0-9\-_]+)', text)
+    # Check standard Order Number/ID (also catches garbled OCR like "Order td:" for "Order Id:")
+    ord_match = re.search(r'(?i)Order\s+(?:Number|No|ID?|td)\s*[:\-]?\s*([A-Za-z0-9\-_]+)', text)
     if ord_match:
         data["Order ID"] = ord_match.group(1).upper()
 
@@ -290,97 +290,133 @@ def extract_fields(text):
             data["Due Date"] = raw_due_date
 
     # 4. TOTAL AMOUNT EXTRACTION
-    # Strategy A: Parse "Amount in Words" as ground truth (most reliable)
-    # Tesseract often reads ₹ as % - we use the words to confirm
-    words_total = None
-    for i, ln in enumerate(lines):
-        if "amount in words" in ln.lower() or "in words" in ln.lower():
-            # The amount in words is on the next line
-            words_line = lines[i+1].strip() if i+1 < len(lines) else ""
-            combined_words = ln + " " + words_line
-            # word_to_number conversion for common patterns
-            word_map = {
-                "zero":0, "one":1, "two":2, "three":3, "four":4, "five":5,
-                "six":6, "seven":7, "eight":8, "nine":9, "ten":10,
-                "eleven":11, "twelve":12, "thirteen":13, "fourteen":14, "fifteen":15,
-                "sixteen":16, "seventeen":17, "eighteen":18, "nineteen":19, "twenty":20,
-                "thirty":30, "forty":40, "fifty":50, "sixty":60, "seventy":70,
-                "eighty":80, "ninety":90, "hundred":100, "thousand":1000,
-            }
-            # Try extracting a decimal from accompanying text first
-            # e.g. "Two Hundred Sixty-four Point One only" → 264.1
-            words_lower = combined_words.lower()
-            # Look for pattern: "X Point Y" to extract decimal
-            point_match = re.search(r'(\w+)\s+point\s+(\w+)', words_lower)
-            if point_match:
-                try:
-                    int_part = word_map.get(point_match.group(1).strip(), None)
-                    dec_part = word_map.get(point_match.group(2).strip(), None)
-                    # This is a simplified parser - look for any decimal in source
-                except: pass
-            break
-    
-    # Strategy B: Collect ALL currency-prefixed numbers (% = ₹ due to OCR)
-    # Read every number preceded by % ₹ $ or Rs on ANY line
-    all_currency_vals = []
-    for ln in lines:
-        # % is OCR artifact for ₹ — treat identically
-        hits = re.findall(r'(?:[%₹\$€£]|Rs\.?\s*|INR\s*)\s*(\d{1,8}(?:\.\d{1,2})?)', ln, re.IGNORECASE)
-        for h in hits:
-            try:
-                v = float(h.replace(',',''))
-                if 0 < v < 200000: all_currency_vals.append(v)
-            except: pass
-        # Also catch bare decimals (XX.XX format) on lines with table markers
-        if '|' in ln:
-            bare = re.findall(r'\b(\d{1,6}\.\d{2})\b', ln)
-            for b in bare:
-                try:
-                    v = float(b)
-                    if 0 < v < 200000: all_currency_vals.append(v)
-                except: pass
+    # KEY INSIGHT from real OCR analysis:
+    # - Zomato: "IGST@ 38.00%" → 38.00 is a TAX RATE %, NOT an amount. Must be excluded.
+    # - Zomato: "Total Amount: Indian Rupee One And Zero Paisa only" → real total from words
+    # - Amazon: "Amount in Words: Two Hundred Sixty-four Point One only" → 264.10
+    # - Tesseract reads ₹ as % on some fonts — both treated as currency prefix
 
-    # Strategy C: Validate against "Amount in Words" if possible
-    # Find an explicit "Amount in Words" confirmation string
+    # Helper: Indian currency word-to-number parser
+    def parse_indian_rupee_words(sentence):
+        """Parse 'Indian Rupee X And Y Paisa only' style strings."""
+        word_map = {
+            "zero":0,"one":1,"two":2,"three":3,"four":4,"five":5,
+            "six":6,"seven":7,"eight":8,"nine":9,"ten":10,
+            "eleven":11,"twelve":12,"thirteen":13,"fourteen":14,"fifteen":15,
+            "sixteen":16,"seventeen":17,"eighteen":18,"nineteen":19,
+            "twenty":20,"thirty":30,"forty":40,"fifty":50,
+            "sixty":60,"seventy":70,"eighty":80,"ninety":90,
+            "hundred":100,"thousand":1000,"lakh":100000,
+        }
+        s = sentence.lower()
+        # Split on 'and ... paisa' to separate rupees from paisa
+        paisa_val = 0
+        paisa_m = re.search(r'and\s+(\w+)\s+paisa', s)
+        if paisa_m:
+            paisa_val = word_map.get(paisa_m.group(1), 0)
+            s = s[:paisa_m.start()]  # keep only rupee part
+
+        # Remove filler words
+        for filler in ["indian", "rupee", "rupees", "only", "and"]:
+            s = s.replace(filler, " ")
+
+        # Point / decimal handling: "sixty four point one" → 64.1
+        point_val = 0
+        point_m = re.search(r'point\s+(\w+)', s)
+        if point_m:
+            point_val = word_map.get(point_m.group(1), 0) / 10.0
+            s = s[:point_m.start()]
+
+        # Sum tokens left-to-right (simple accumulator for < 10 lakh amounts)
+        tokens = [t.strip() for t in s.split() if t.strip() in word_map]
+        total = 0
+        current = 0
+        for token in tokens:
+            v = word_map[token]
+            if v == 100:
+                current = (current or 1) * 100
+            elif v >= 1000:
+                total += (current or 1) * v
+                current = 0
+            else:
+                current += v
+        total += current
+        result = total + point_val + paisa_val / 100.0
+        return result if result > 0 else None
+
+    # Step 1: Parse "Total Amount:" or "Amount in Words" text lines
     aiw_val = None
     for i, ln in enumerate(lines):
-        if "amount in words" in ln.lower():
-            next_text = lines[i+1].strip() if i+1 < len(lines) else ""
-            # "Two Hundred Sixty-four Point One only" → look for matching float
-            hundreds_match = re.search(r'(\w+)\s+[Hh]undred', next_text)
-            if hundreds_match:
-                # Attempt to build approximate value from hundreds word
-                h_word = hundreds_match.group(1).lower()
-                hundreds_map = {"one":100,"two":200,"three":300,"four":400,"five":500,
-                                "six":600,"seven":700,"eight":800,"nine":900}
-                if h_word in hundreds_map:
-                    approx = hundreds_map[h_word]
-                    # Find the actual decimal closest to this approximation
-                    best = min(all_currency_vals, key=lambda x: abs(x - approx), default=None)
-                    if best and abs(best - approx) < 150:
-                        aiw_val = best
-            elif next_text.lower().startswith("seven"):
-                aiw_val = 7.0
-            elif next_text.lower().startswith("thirty"):
-                aiw_val = min([v for v in all_currency_vals if 30 <= v < 50], default=None)
-            break
+        ll = ln.lower()
+        # Zomato style: "Total Amount: Indian Rupee One And Zero Paisa only"
+        if re.search(r'total\s+amount\s*:', ll):
+            after = ln.split(':', 1)[-1].strip()
+            # Try to parse the words after the colon
+            parsed = parse_indian_rupee_words(after)
+            if parsed is not None:
+                aiw_val = parsed
+                break
+        # Amazon style: "Amount in Words:" followed by words on next line
+        if "amount in words" in ll:
+            words_src = ln
+            if ':' in ln:
+                words_src = ln.split(':', 1)[-1].strip()
+            if len(words_src) < 5 and i+1 < len(lines):
+                words_src = lines[i+1]
+            parsed = parse_indian_rupee_words(words_src)
+            if parsed is not None:
+                aiw_val = parsed
+                break
 
-    total_val = aiw_val if aiw_val else (max(all_currency_vals) if all_currency_vals else None)
+    # Step 2: Collect currency-prefixed numbers, EXCLUDING tax rates (number followed by %)
+    all_currency_vals = []
+    for ln in lines:
+        # Find all numbers – then discard those immediately followed by %  (= tax rate)
+        # Negative lookahead: (?!\s*%) ensures we skip "38.00%"
+        hits = re.findall(
+            r'(?:[₹\$€£]|Rs\.?\s*|INR\s*)\s*(\d{1,8}(?:\.\d{1,2})?)(?!\s*%)',
+            ln, re.IGNORECASE
+        )
+        for h in hits:
+            try:
+                v = float(h.replace(',', ''))
+                if 0 < v < 200000:
+                    all_currency_vals.append(v)
+            except: pass
+
+        # Bare decimals in table rows — only if NOT followed by %
+        if '|' in ln:
+            bare_hits = re.finditer(r'\b(\d{1,6}\.\d{2})\b(?!\s*%)', ln)
+            for bh in bare_hits:
+                try:
+                    v = float(bh.group(1))
+                    if 0 < v < 200000:
+                        all_currency_vals.append(v)
+                except: pass
+
+    # Step 3: Pick the total
+    # Priority: words-parsed value > max of currency-prefixed values
+    if aiw_val is not None:
+        total_val = aiw_val
+    elif all_currency_vals:
+        total_val = max(all_currency_vals)
+    else:
+        total_val = None
 
     if total_val is not None:
         data["Total Amount"] = f"₹ {total_val:.2f}"
-        
-    # CROSS-POPULATION: Fill empty cards from alternate label
+
+    # CROSS-POPULATION: Fill empty cards from alternate labels
     if data["Order ID"] == "Not found" and data["Invoice Number"] != "Not found":
         data["Order ID"] = data["Invoice Number"]
     elif data["Invoice Number"] == "Not found" and data["Order ID"] != "Not found":
         data["Invoice Number"] = data["Order ID"]
-        
+
     if data["Order Date"] == "Not found" and data["Invoice Date"] != "Not found":
         data["Order Date"] = data["Invoice Date"]
     elif data["Invoice Date"] == "Not found" and data["Order Date"] != "Not found":
         data["Invoice Date"] = data["Order Date"]
-    
+
     return data
 
 
