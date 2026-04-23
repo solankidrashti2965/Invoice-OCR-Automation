@@ -311,7 +311,7 @@ def extract_fields(text):
         lower_ln = ln.lower()
         keywords = ["grand total", "total amount", "net amount", "amount payable", "total paid", "total due", "pay", "total"]
         for kw in keywords:
-            if kw in lower_ln and "tax" not in lower_ln and "saving" not in lower_ln:
+            if kw in lower_ln:
                 # Get the text after the keyword
                 after_kw = lower_ln.split(kw, 1)[-1]
                 # Check current line trailing text
